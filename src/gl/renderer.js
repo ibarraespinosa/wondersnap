@@ -193,26 +193,37 @@ export class Renderer {
     gl.useProgram(L.p);
     if (d.isGeo && d.rot) {
       const rCol = mat3Col(d.rot);
+      const cCol = d.coastColor ?? [0.35, 0.96, 1.0];
+      const cBright = (d.coastBright ?? 1.6) * d.alpha;
       this.m4(L, 'u_mvp', d.projView);
       this.m3(L, 'u_rot', rCol);
       this.f1(L, 'u_use_rot', 1.0);
       this.f1(L, 'u_scale', d.scale ?? 1.0);
       this.f1(L, 'u_front_fade', 1.0);
+      this.v2(L, 'u_offset_ndc', [0, 0]);
       // 1) Earth lat/lon graticule at R_EARTH
-      this.v3(L, 'u_color', [0.15, 0.45, 0.78]);
-      this.f1(L, 'u_alpha', 0.14 * d.alpha);
+      this.v3(L, 'u_color', cCol.map((c) => c * 0.45));
+      this.f1(L, 'u_alpha', 0.22 * cBright);
       gl.bindVertexArray(this.vEarthGlobe);
       gl.drawArrays(gl.LINES, 0, this.earthGlobeCount);
-      // 2) Natural Earth 110m 3D coastlines locked to the rotating globe
-      this.v3(L, 'u_color', [0.28, 0.88, 1.0]);
-      this.f1(L, 'u_alpha', 0.48 * d.alpha);
+      // 2) Natural Earth 110m 3D coastlines: center hot core + 4-way thick neon halo for mobile/high-DPI visibility
+      this.v3(L, 'u_color', cCol);
+      this.f1(L, 'u_alpha', 0.95 * cBright);
       gl.bindVertexArray(this.vCoast);
       gl.drawArrays(gl.LINES, 0, this.coastCount);
+      const pxX = 2.2 / Math.max(1, W), pxY = 2.2 / Math.max(1, H);
+      this.f1(L, 'u_alpha', 0.45 * cBright);
+      for (const off of [[pxX, 0], [-pxX, 0], [0, pxY], [0, -pxY]]) {
+        this.v2(L, 'u_offset_ndc', off);
+        gl.drawArrays(gl.LINES, 0, this.coastCount);
+      }
+      this.v2(L, 'u_offset_ndc', [0, 0]);
     } else {
       this.m4(L, 'u_mvp', d.globeMvp);
       this.f1(L, 'u_use_rot', 0.0);
       this.f1(L, 'u_scale', 1.0);
       this.f1(L, 'u_front_fade', 0.0);
+      this.v2(L, 'u_offset_ndc', [0, 0]);
       this.v3(L, 'u_color', d.globeColor ?? d.color);
       this.f1(L, 'u_alpha', 0.12 * d.alpha);
       gl.bindVertexArray(this.vGlobe);

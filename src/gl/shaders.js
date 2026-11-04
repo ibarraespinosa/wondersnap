@@ -179,10 +179,13 @@ uniform mat4 u_mvp;
 uniform mat3 u_rot;
 uniform float u_use_rot;
 uniform float u_scale;
+uniform vec2 u_offset_ndc;
 out float v_facing;
 void main() {
   vec3 p = u_use_rot > 0.5 ? (u_rot * (in_pos * u_scale)) : in_pos;
-  gl_Position = u_mvp * vec4(p, 1.0);
+  vec4 clip = u_mvp * vec4(p, 1.0);
+  clip.xy += u_offset_ndc * clip.w;
+  gl_Position = clip;
   v_facing = normalize(p + vec3(0.0, 0.0, 1e-6)).z;
 }`;
 

@@ -136,6 +136,7 @@ class App {
     this.explode = 0; this.manualExplode = 0; this.tintMix = 0; this.scale = 1;
     this.spin = 0; this.pitch = 0; this.grab = null; this.handRotate = true; this.handRotating = false;
     this.dragYaw = 0; this.dragPitch = 0; this.geoTarget = null; this.autoRotate = true; this.labelsOn = true; this.trails = CFG.trails;
+    this.coastColor = [0.35, 0.96, 1.0]; this.coastBright = 1.85;
     this.zoom = 1; this.zoomTarget = 1; this.zoomGrab = null;
     this.pulse = 1; this.flow = 0; this.expHist = []; this.wasBusy = false;
     this.sel = -1; this.pulled = false; this.pullAmt = 0; this.hover = { li: -1, t0: 0 }; this.anchors = []; this.pointer = null; this.lostT = 0;
@@ -320,7 +321,7 @@ class App {
       projView: this.projView, globeMvp: mul4(this.projView, rotY4(0.1 * t)), color: this.color, tintMix: this.tintMix,
       alpha, trails: this.trails, trailLen: 0.06, pointPx: this.canvas.height * 0.012 * Math.sqrt(this.zoom), gain: this.gain,
       video: { has: this.hasVideo && this.camOn, dim: 0.65 }, sel, cutOn: this.cut.on && formed, cut: this.cut.x, flow: this.flow, time: t,
-      isGeo: !!def.isGeo, rot, scale,
+      isGeo: !!def.isGeo, rot, scale, coastColor: this.coastColor, coastBright: this.coastBright,
     });
     this.drawOverlay(t, machine, formT, pointing);
     this.recorder.frame();
@@ -723,6 +724,22 @@ class App {
     if (bCoordGo) bCoordGo.onclick = goCoords;
     for (const el of [inLat, inLon]) {
       if (el) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); goCoords(); } });
+    }
+    const inCoastCol = this.$('inCoastColor'), inCoastBr = this.$('inCoastBright');
+    if (inCoastCol) {
+      inCoastCol.addEventListener('input', () => {
+        const hex = inCoastCol.value.replace('#', '');
+        this.coastColor = [
+          parseInt(hex.slice(0, 2), 16) / 255,
+          parseInt(hex.slice(2, 4), 16) / 255,
+          parseInt(hex.slice(4, 6), 16) / 255,
+        ];
+      });
+    }
+    if (inCoastBr) {
+      inCoastBr.addEventListener('input', () => {
+        this.coastBright = clamp(parseFloat(inCoastBr.value) / 100, 0.2, 3.5);
+      });
     }
   }
   showCategory(c) {
