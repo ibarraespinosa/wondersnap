@@ -119,7 +119,7 @@ void main() {
   base *= 1.0 + u_flow * 1.6 * pow(max(0.0, sin(in_pos.y * 9.0 - u_time * 5.0)), 14.0);
   float edge = u_cut_on * (1.0 - smoothstep(0.0, 0.03, u_cut - in_pos.x));      // glowing cross-section face
   base = mix(base, vec3(1.0), edge * 0.7) * (1.0 + edge);
-  v_col = mix(base, vec3(1.0), clamp(speed * 0.18, 0.0, 0.75));   // fast = hotter / whiter
+  v_col = mix(base, vec3(1.0), clamp(speed * 0.18 * (1.0 - 0.85 * u_tint_mix), 0.0, 0.75));   // preserve per-particle time colors
   v_a = u_alpha;
 }`;
 
@@ -194,7 +194,8 @@ uniform float u_alpha;
 uniform float u_front_fade;
 out vec4 f_color;
 void main() {
-  float fade = mix(1.0, smoothstep(-0.35, 0.15, v_facing) * 0.88 + 0.12, u_front_fade);
+  if (u_front_fade > 0.5 && v_facing < -0.02) discard;
+  float fade = mix(1.0, smoothstep(-0.02, 0.22, v_facing), u_front_fade);
   f_color = vec4(u_color * (u_alpha * fade), 1.0);
 }`;
 

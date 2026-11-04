@@ -292,7 +292,7 @@ class App {
     // 8. colour morph + per-part colours once a machine has formed
     const k = 1 - Math.exp(-dt * 4);
     for (let i = 0; i < 3; i++) this.color[i] += (def.color[i] - this.color[i]) * k;
-    const tintT = machine && st.state === FORMED ? smooth(0.2, 1.4, formT) : 0;
+    const tintT = def.kind === 'hysplit' ? 1 : (machine && st.state === FORMED ? smooth(0.2, 1.4, formT) : 0);
     this.tintMix += (tintT - this.tintMix) * (1 - Math.exp(-dt * 5));
     const alpha = st.alpha(t);
 
@@ -870,7 +870,12 @@ function boot() {
     return;
   }
   const start = document.getElementById('start');
-  const hideStart = () => { start.hidden = true; };
+  const hideStart = () => {
+    start.hidden = true;
+    if (!CFG.manual && CATALOG[app.ctl.state.index]?.kind === 'hysplit' && app.ctl.state.state === IDLE) {
+      app.selectModel(app.ctl.state.index, true);
+    }
+  };
   document.getElementById('bStartCam').onclick = async () => { if (await app.startCamera()) hideStart(); };
   document.getElementById('bStartNoCam').onclick = () => { hideStart(); app.toast('Keyboard: Space = snap · F = fist · O = open · E = explode · D = demo · H = help'); };
   if (CFG.autostart === 'camera') { hideStart(); app.startCamera(); }

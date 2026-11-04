@@ -215,27 +215,12 @@ export function buildHysplitModel(index, def, n, rng) {
   const tint = new Float32Array(n * 3);
   const pick = new Float32Array(n).fill(-1);
 
-  const nCoast = Math.floor(n * 0.10);
-  const nBeaconTotal = Math.floor(n * 0.02);
-  const nPlumeTotal = n - nCoast - nBeaconTotal;
+  // Coastlines are rendered as crisp 3D GL_LINES in renderer.js (no duplicate coastline particles)
+  const nCoast = 0;
+  const nBeaconTotal = Math.floor(n * 0.015);
+  const nPlumeTotal = n - nBeaconTotal;
 
   let cursor = 0;
-
-  // 1. Sample 3D Earth coastline shimmer particles (unpickable background reference)
-  const nSeg = COASTLINE_SEGMENTS.length >> 2;
-  for (let i = 0; i < nCoast; i++) {
-    const si = Math.floor(rand() * nSeg) * 4;
-    const f = rand();
-    const lat = COASTLINE_SEGMENTS[si] + (COASTLINE_SEGMENTS[si + 2] - COASTLINE_SEGMENTS[si]) * f;
-    const lon = COASTLINE_SEGMENTS[si + 1] + (COASTLINE_SEGMENTS[si + 3] - COASTLINE_SEGMENTS[si + 1]) * f;
-    const p = latLonAltToVec3(lat, lon, 0);
-    const j = cursor * 3, o = cursor * 4;
-    target[j] = p[0]; target[j + 1] = p[1]; target[j + 2] = p[2];
-    offset[o] = 0; offset[o + 1] = 0; offset[o + 2] = 0; offset[o + 3] = 0;
-    tint[j] = 0.12; tint[j + 1] = 0.45; tint[j + 2] = 0.65;
-    pick[cursor] = -1;
-    cursor++;
-  }
 
   const runs = def.runs.map((k) => HYSPLIT_RUNS[k]).filter(Boolean);
   const isMulti = def.mode === 'multi_receptor';
