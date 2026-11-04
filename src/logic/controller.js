@@ -3,8 +3,8 @@ import { classify, openness, pinched, PoseDebouncer, SnapDetector, GESTURE_PROFI
 import { WonderState } from './state.js';
 
 export class Controller {
-  constructor(n, isMachine = () => false, holdFrames = 4) {
-    this.state = new WonderState(n, isMachine);
+  constructor(n, isMachine = () => false, holdFrames = 4, isGeo = () => false) {
+    this.state = new WonderState(n, isMachine, 0, isGeo);
     this.debounce = new PoseDebouncer(holdFrames);
     this.snap = new SnapDetector();
     this.gestureSensitivity = 'standard';

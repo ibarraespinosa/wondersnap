@@ -2,7 +2,7 @@
 // 21 normalized landmarks. Port of wondersnap/gestures.py (same thresholds) + openness and peace sign.
 export const WRIST = 0, THUMB_TIP = 4, MIDDLE_MCP = 9, MIDDLE_TIP = 12;
 export const TIPS = [8, 12, 16, 20], PIPS = [6, 10, 14, 18], MCPS = [5, 9, 13, 17];
-export const OPEN = 'open', FIST = 'fist', PEACE = 'peace', POINT = 'point', OTHER = 'other', NONE = 'none';
+export const OPEN = 'open', FIST = 'fist', PEACE = 'peace', THREE = 'three', POINT = 'point', POINT_HORIZ = 'point_horiz', OTHER = 'other', NONE = 'none';
 
 export const STANDARD = Object.freeze({
   extendedFingerRatio: 1.15,
@@ -41,8 +41,15 @@ export function classify(lm, profile = STANDARD) {
   const thumbOut = d(lm[THUMB_TIP], lm[17]) > handScale(lm) * profile.openThumbRatio;  // thumb tip far from pinky base
   if (ext.every(Boolean) && thumbOut) return OPEN;
   if (curled.every(Boolean)) return FIST;
-  if (ext[0] && ext[1] && curled[2] && curled[3]) return PEACE;           // ✌ index + middle up
-  if (ext[0] && curled[1] && curled[2] && curled[3]) return POINT;        // ☝ index finger only
+  if (ext[0] && ext[1] && ext[2] && curled[3]) return THREE;              // 3 fingers (index + middle + ring) -> Antarctica
+  if (ext[0] && ext[1] && curled[2] && curled[3]) return PEACE;           // ✌ 2 fingers (index + middle) -> Panama / Center
+  if (ext[0] && curled[1] && curled[2] && curled[3]) {
+    // Distinguish horizontal pointing (👉 Arctic) from vertical pointing (☝ pick part)
+    const dx = Math.abs(lm[8][0] - lm[5][0]);
+    const dy = Math.abs(lm[8][1] - lm[5][1]);
+    if (dx > dy * 1.15) return POINT_HORIZ;
+    return POINT;
+  }
   return OTHER;
 }
 
@@ -71,7 +78,7 @@ export function openness(lm, profile = STANDARD) {
 
 /** A pose must be seen for `hold` consecutive frames (per-pose override) before it becomes the stable pose. */
 export class PoseDebouncer {
-  constructor(hold = 4, holdFor = { [PEACE]: 6 }) {
+  constructor(hold = 4, holdFor = { [PEACE]: 6, [THREE]: 5, [POINT_HORIZ]: 5 }) {
     this.hold = hold; this.holdFor = holdFor;
     this.stable = NONE; this.cand = NONE; this.n = 0;
   }

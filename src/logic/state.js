@@ -4,17 +4,17 @@
 //   SPHERE --fist--> FORMED (particles fly into the current model)
 //   FORMED --open--> SPHERE + next model        (wonders only)
 //   FORMED + machine: hand openness = exploded view (open = apart, fist = assembled) — handled by the app
-//   SPHERE/FORMED --peace ✌--> SPHERE + next model (any model)
+//   SPHERE/FORMED --peace ✌--> SPHERE + next model (wonders/machines; on HYSPLIT 3D Earth, ✌ centers Panama)
 //   SPHERE/FORMED --snap--> DISSOLVE --(1.2 s)--> IDLE
-import { OPEN, FIST, PEACE } from './gestures.js';
+import { OPEN, FIST, PEACE, THREE, POINT_HORIZ } from './gestures.js';
 
 export const IDLE = 'idle', SPHERE = 'sphere', FORMED = 'formed', DISSOLVE = 'dissolve';
 export const SIM = { idle: 0, sphere: 1, formed: 2, dissolve: 3 };
 export const DISSOLVE_S = 1.2, FADE_IN_S = 0.35;
 
 export class WonderState {
-  constructor(n, isMachine = () => false, start = 0) {
-    this.n = n; this.isMachine = isMachine; this.index = start;
+  constructor(n, isMachine = () => false, start = 0, isGeo = () => false) {
+    this.n = n; this.isMachine = isMachine; this.isGeo = isGeo; this.index = start;
     this.state = IDLE; this.tState = 0; this.kick = false; this.fadeIn = false;
     this.targetDirty = true;           // app must upload model `index` into the target buffers
     this.events = [];                  // event log, drained by the UI
@@ -35,7 +35,15 @@ export class WonderState {
       if (this.state === IDLE) { this.go(SPHERE, t); this.kick = true; this.fadeIn = true; this.emit('snap'); }
       else if (this.state === SPHERE || this.state === FORMED) { this.go(DISSOLVE, t); this.emit('dissolve'); }
     } else if (changed && pose === PEACE && (this.state === SPHERE || this.state === FORMED)) {
-      this.advance(1); this.go(SPHERE, t); this.fadeIn = false; this.emit('next');
+      if (this.isGeo(this.index)) {
+        this.emit('view_panama');
+      } else {
+        this.advance(1); this.go(SPHERE, t); this.fadeIn = false; this.emit('next');
+      }
+    } else if (changed && pose === POINT_HORIZ && (this.state === SPHERE || this.state === FORMED) && this.isGeo(this.index)) {
+      this.emit('view_arctic');
+    } else if (changed && pose === THREE && (this.state === SPHERE || this.state === FORMED) && this.isGeo(this.index)) {
+      this.emit('view_antarctic');
     } else if (this.state === SPHERE && changed && pose === FIST) {
       this.go(FORMED, t); this.fadeIn = false; this.emit('form');
     } else if (this.state === FORMED && changed && pose === OPEN && !this.isMachine(this.index)) {

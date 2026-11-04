@@ -2,9 +2,9 @@
 // (hand openness = how far apart the parts fly), twist = rotate, ✌ = next, ☝ point = pick a part, pinch = pull it
 // out, two hands = zoom, snap = dissolve. Plus quiz, voice, cut-away, recording, beating heart / breathing lungs.
 // MediaPipe (hands) + WebGL2 (GPU particles via transform feedback) + procedural models.
-import { CATALOG, isMachine, buildModel } from './models/catalog.js';
+import { CATALOG, isMachine, isHysplit, buildModel } from './models/catalog.js';
 import { Controller } from './logic/controller.js';
-import { OPEN, FIST, PEACE, POINT, NONE } from './logic/gestures.js';
+import { OPEN, FIST, PEACE, THREE, POINT, POINT_HORIZ, NONE } from './logic/gestures.js';
 import { IDLE, SPHERE, FORMED, DISSOLVE, SIM } from './logic/state.js';
 import { Renderer, perspective, mul4, translate4, rotY4, project } from './gl/renderer.js';
 import { HandCamera } from './hands.js';
@@ -32,8 +32,15 @@ const CFG = {
 
 const HAND_EDGES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12],
   [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [17, 18], [18, 19], [19, 20], [0, 17]];
-const POSE_UI = { [OPEN]: ['✋', 'Open hand'], [FIST]: ['✊', 'Fist'], [PEACE]: ['✌', 'Peace'], [POINT]: ['☝', 'Pointing'], other: ['🤚', 'Moving'], [NONE]: ['·', 'No hand'] };
-const POSE_COLOR = { [OPEN]: '#66e0ff', [FIST]: '#ffd166', [PEACE]: '#ff6bd6', [POINT]: '#7dff9b', other: '#e8f1ff', [NONE]: '#e8f1ff' };
+const POSE_UI = {
+  [OPEN]: ['✋', 'Open hand'], [FIST]: ['✊', 'Fist'], [PEACE]: ['✌', '2 Fingers (Panama)'],
+  [THREE]: ['🤟', '3 Fingers (Antarctica)'], [POINT]: ['☝', 'Pointing'],
+  [POINT_HORIZ]: ['👉', 'Horiz. Point (Arctic)'], other: ['🤚', 'Moving'], [NONE]: ['·', 'No hand'],
+};
+const POSE_COLOR = {
+  [OPEN]: '#66e0ff', [FIST]: '#ffd166', [PEACE]: '#ff6bd6', [THREE]: '#4deeea',
+  [POINT]: '#7dff9b', [POINT_HORIZ]: '#ffe66d', other: '#e8f1ff', [NONE]: '#e8f1ff',
+};
 const rgbCss = (c, a = 1) => `rgba(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(c[2] * 255)}, ${a})`;
 const CATEGORIES = [...new Set(CATALOG.map((d) => d.category))];
 
@@ -117,7 +124,7 @@ class App {
     this.canvas = $('gl'); this.overlay = $('overlay'); this.octx = this.overlay.getContext('2d');
     this.video = $('cam');
     this.renderer = new Renderer(this.canvas, CFG.n, { preserve: CFG.manual });
-    this.ctl = new Controller(CATALOG.length, isMachine);
+    this.ctl = new Controller(CATALOG.length, isMachine, 4, isHysplit);
     this.ctl.state.index = CFG.start;
     this.store = new ModelStore(CFG.n);
     this.model = null; this.uploaded = -1; this.uploadT = 0;
@@ -125,7 +132,7 @@ class App {
     this.color = [...CATALOG[CFG.start].color];
     this.explode = 0; this.manualExplode = 0; this.tintMix = 0; this.scale = 1;
     this.spin = 0; this.pitch = 0; this.grab = null; this.handRotate = true; this.handRotating = false;
-    this.dragYaw = 0; this.dragPitch = 0; this.autoRotate = true; this.labelsOn = true; this.trails = CFG.trails;
+    this.dragYaw = 0; this.dragPitch = 0; this.geoTarget = null; this.autoRotate = true; this.labelsOn = true; this.trails = CFG.trails;
     this.zoom = 1; this.zoomTarget = 1; this.zoomGrab = null;
     this.pulse = 1; this.flow = 0; this.expHist = []; this.wasBusy = false;
     this.sel = -1; this.pulled = false; this.pullAmt = 0; this.hover = { li: -1, t0: 0 }; this.anchors = []; this.pointer = null; this.lostT = 0;
@@ -199,7 +206,8 @@ class App {
     if (formed) formT = t - Math.max(st.tState, this.uploadT);
     const vis = ctl.handVisible(t);
     const pointing = vis && (ctl.pose === POINT || ctl.rawPose === POINT);
-    const busyHand = pointing || ctl.pinch;                               // pointing / pinching must not move or explode the model
+    const geoPresetPose = vis && [POINT_HORIZ, PEACE, THREE].includes(ctl.pose) && CATALOG[st.index]?.isGeo;
+    const busyHand = pointing || geoPresetPose || ctl.pinch;              // pointing / pinching / geo preset must not move or explode the model
     const twoHands = vis && ctl.secondVisible(t) && formed;
 
     // 3. exploded view: hand openness when a hand is visible, else slider / keys / wheel / voice / quiz
@@ -229,7 +237,16 @@ class App {
     //    the hand grabbed it, so nothing jumps. Otherwise: auto-spin + mouse drag; exploded -> ease to a 3/4 view.
     const def = CATALOG[st.index];
     const handRot = this.handRotate && formed && vis && !!ctl.landmarks && !busyHand && !twoHands;
-    if (handRot) {
+    if (this.geoTarget && t < this.geoTarget.until) {
+      this.grab = null;
+      const kr = 1 - Math.exp(-dt * 7);
+      const dyaw = wrapPi(this.geoTarget.yaw - this.spin);
+      this.spin += dyaw * kr;
+      this.pitch += (this.geoTarget.pitch - this.pitch) * kr;
+      this.dragYaw *= Math.exp(-dt * 10);
+      this.dragPitch *= Math.exp(-dt * 10);
+    } else if (handRot) {
+      this.geoTarget = null;
       if (!this.grab) this.grab = { roll: ctl.roll, y: ctl.handY, spin: this.spin, pitch: this.pitch };
       const yaw = this.grab.spin + HAND_YAW_GAIN * wrapPi(ctl.roll - this.grab.roll);
       const pitch = clamp(this.grab.pitch + HAND_PITCH_GAIN * (ctl.handY - this.grab.y), -0.75, 0.75);
@@ -246,8 +263,8 @@ class App {
             const d = ((((def.viewYaw - this.spin) % Math.PI) + Math.PI * 1.5) % Math.PI) - Math.PI / 2;
             this.spin += d * (1 - Math.exp(-dt * 3.5 * this.explode));
           }
+          this.pitch *= Math.exp(-dt * 1.5);
         }
-        this.pitch *= Math.exp(-dt * 1.5);
       }
     }
     this.handRotating = handRot;
@@ -624,7 +641,18 @@ class App {
     this.chips.forEach((b) => { b.hidden = b.dataset.cat !== c; });
   }
 
-  guideItems(machine) {
+  guideItems(machine, isGeo = false) {
+    if (isGeo) {
+      return [
+        ['snap', '🫰', '<b>Snap</b> — summon particles / dissolve'],
+        ['open', '✋', '<b>Open / Fist</b> — unfold / collapse backtrack time (0h → -336h)'],
+        ['arctic', '👉', '<b>1 finger horizontal</b> (or <kbd>1</kbd>) — center on <b>Arctic</b>'],
+        ['peace', '✌', '<b>2 fingers</b> (or <kbd>2</kbd>) — center on <b>Panama / Americas</b>'],
+        ['antarctic', '🤟', '<b>3 fingers</b> (or <kbd>3</kbd>) — center on <b>Antarctica</b>'],
+        ['point', '☝', '<b>1 finger vertical</b> — point at a receptor / time window'],
+        ['twist', '🔄', '<b>Twist / raise hand</b> — rotate & tilt Earth · 🙌 zoom'],
+      ];
+    }
     return [
       ['snap', '🫰', '<b>Snap</b> — summon particles / dissolve'],
       ['fist', '✊', machine ? '<b>Fist</b> — put it together' : '<b>Fist</b> — form the wonder'],
@@ -634,6 +662,15 @@ class App {
       ['zoom', '🙌', '<b>Two hands</b> apart / together — zoom'],
       ['peace', '✌', '<b>Peace</b> — jump to the next model'],
     ];
+  }
+
+  focusGeo(latDeg, lonDeg, label) {
+    const def = CATALOG[this.ctl.state.index];
+    const baseTilt = deg(def?.tilt || 0);
+    const targetPitch = clamp(deg(latDeg) - baseTilt, -1.3, 1.3);
+    const targetYaw = -deg(lonDeg);
+    this.geoTarget = { yaw: targetYaw, pitch: targetPitch, until: this.t + 1.4 };
+    this.toast(label);
   }
 
   toast(msg) {
@@ -675,10 +712,10 @@ class App {
     }
     if (!this.sliderActive) $('explodeSlider').value = Math.round(this.explode * 100);
     const hot = st.state === IDLE || st.state === DISSOLVE ? 'snap' : st.state === SPHERE ? 'fist' : 'open';
-    const gk = `${isM}|${hot}`;
+    const gk = `${isM}|${!!def.isGeo}|${hot}`;
     if (this.guideKey !== gk) {
       this.guideKey = gk;
-      $('guide').innerHTML = this.guideItems(isM).map(([k, e, txt]) => `<li class="${k === hot || (['peace', 'twist', 'point'].includes(k) && st.state === FORMED) ? 'hot' : ''}"><span class="e">${e}</span><span>${txt}</span></li>`).join('');
+      $('guide').innerHTML = this.guideItems(isM, !!def.isGeo).map(([k, e, txt]) => `<li class="${k === hot || (['peace', 'arctic', 'antarctic', 'twist', 'point'].includes(k) && st.state === FORMED) ? 'hot' : ''}"><span class="e">${e}</span><span>${txt}</span></li>`).join('');
     }
     $('bigTitle').classList.toggle('show', st.state === FORMED && formT > 0.8 && this.uploaded === st.index && this.explode < 0.15 && this.sel < 0 && !this.quiz);
     // part card
@@ -711,6 +748,9 @@ class App {
       if (e === 'snap') this.toast('🫰 Snap! Particles summoned');
       else if (e === 'form') this.toast(isM ? `✊ Assembling: ${name}` : `✊ Forming ${name}`);
       else if (e === 'next') this.toast(`✌ Next: ${name}`);
+      else if (e === 'view_arctic') this.focusGeo(78, -105, '👉 Centering on Arctic (78°N, 105°W)');
+      else if (e === 'view_panama') this.focusGeo(9, -80, '✌ Centering on Panama / Center (9°N, 80°W)');
+      else if (e === 'view_antarctic') this.focusGeo(-80, 170, '🤟 Centering on Antarctica (80°S, 170°E)');
       else if (e === 'select') this.toast(`→ ${name}`);
       else if (e === 'dissolve') this.toast('💥 Dissolved');
     }
@@ -748,6 +788,9 @@ class App {
       else if (k === '+' || k === '=') this.zoomTarget = clamp(this.zoomTarget * 1.15, 0.5, 2.6);
       else if (k === '-' || k === '_') this.zoomTarget = clamp(this.zoomTarget / 1.15, 0.5, 2.6);
       else if (k === '0') this.zoomTarget = 1;
+      else if (k === '1') this.focusGeo(78, -105, '👉 Centering on Arctic (78°N, 105°W)');
+      else if (k === '2') this.focusGeo(9, -80, '✌ Centering on Panama / Center (9°N, 80°W)');
+      else if (k === '3') this.focusGeo(-80, 170, '🤟 Centering on Antarctica (80°S, 170°E)');
       else if (k === 'x') this.toggleCut();
       else if (k === ',') this.cut.target = clamp(this.cut.target - 0.1, -1.25, 1.25);
       else if (k === '.') this.cut.target = clamp(this.cut.target + 0.1, -1.25, 1.25);
