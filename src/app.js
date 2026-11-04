@@ -11,7 +11,7 @@ import { HandCamera } from './hands.js';
 import { hand as synthHand } from './logic/synth.js';
 import { rotX, rotY, matMul, matVec, deg } from './lib/vec.js';
 import { parseCommand, Voice, speak, Recorder } from './features.js';
-import { WEBLLM_MODELS, WebLlmDirector, parseNaturalVisualCommand } from './llm.js';
+import { QUICK_REGIONS, parseNaturalVisualCommand } from './llm.js';
 
 const qs = new URLSearchParams(location.search);
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
@@ -141,8 +141,7 @@ class App {
     this.sel = -1; this.pulled = false; this.pullAmt = 0; this.hover = { li: -1, t0: 0 }; this.anchors = []; this.pointer = null; this.lostT = 0;
     this.quiz = null;
     this.cut = { on: false, x: 0.35, target: 0.35 };
-    this.voice = new Voice((text) => this.voiceCommand(text)); this.voiceOn = false; this.spoken = []; this.lastHeard = '';
-    this.llm = new WebLlmDirector();
+    this.voice = new Voice((text, isFinal) => this.voiceCommand(text, isFinal)); this.voiceOn = false; this.spoken = []; this.lastHeard = '';
     this.recorder = new Recorder(this.canvas, this.overlay); this.lastRecording = null;
     this.t = 0; this.last = null; this.frames = 0; this.fps = 0; this._fpsN = 0; this._fpsT = 0;
     this.handSource = null; this.handSource2 = null; this.lastSynthT = -1; this.demo = null; this.demoHand = undefined;
@@ -425,11 +424,23 @@ class App {
     this.say(ok ? `Correct! ${L[li].info}` : `No, that's the ${L[li].label}.`);
   }
 
-  // ------------------------------------------------------------ voice & in-browser WebLLM
+  // ------------------------------------------------------------ instant keyword, coordinate & voice control
+  resetView() {
+    const def = CATALOG[this.ctl.state.index];
+    this.spin = def?.viewYaw ?? 0;
+    this.pitch = 0; this.dragYaw = 0; this.dragPitch = 0;
+    this.geoTarget = null; this.zoomTarget = 1;
+    this.manualExplode = def?.kind === 'hysplit' ? 1 : 0;
+    if (this.cut.on) this.toggleCut();
+    this.deselect();
+    this.toast('↺ Reset view');
+  }
+
   applyActions(acts) {
     const st = this.ctl.state, done = [];
     for (const a of acts) {
-      if (a.type === 'model') {
+      if (a.type === 'resetView') { this.resetView(); done.push('reset'); }
+      else if (a.type === 'model') {
         const idx = CATALOG.findIndex((d) => d.name.toLowerCase() === String(a.name).toLowerCase() || d.name.toLowerCase().includes(String(a.name).toLowerCase()));
         if (idx >= 0) { this.selectModel(idx); done.push(CATALOG[idx].name); }
       } else if (a.type === 'part') {
@@ -437,7 +448,7 @@ class App {
       } else if (a.type === 'deselect') {
         this.deselect(); done.push('show all');
       } else if (a.type === 'focusGeo' && typeof a.lat === 'number' && typeof a.lon === 'number') {
-        this.focusGeo(a.lat, a.lon, `🧭 ${a.label || `${a.lat.toFixed(1)}°, ${a.lon.toFixed(1)}°`}`);
+        this.focusGeo(a.lat, a.lon, `🎯 ${a.label || `${a.lat.toFixed(1)}°, ${a.lon.toFixed(1)}°`}`);
         done.push(a.label || 'center globe');
       } else if (a.type === 'setBacktrackHours' && typeof a.hours === 'number') {
         const hrs = clamp(a.hours, 0, 336);
@@ -451,7 +462,7 @@ class App {
       else if (a.type === 'dissolve') { if (st.state !== IDLE) this.ctl.keySnap(this.t); done.push('dissolve'); }
       else if (a.type === 'quiz') { this.startQuiz(); done.push('quiz'); }
       else if (a.type === 'stopQuiz') { this.stopQuiz(); done.push('stop quiz'); }
-      else if (a.type === 'cut') { this.toggleCut(); done.push('cut'); }
+      else if (a.type === 'cut') { this.toggleCut(); done.push('slice'); }
       else if (a.type === 'zoomIn') { this.zoomTarget = clamp(this.zoomTarget * 1.3, 0.5, 2.6); done.push('zoom in'); }
       else if (a.type === 'zoomOut') { this.zoomTarget = clamp(this.zoomTarget / 1.3, 0.5, 2.6); done.push('zoom out'); }
       else if (a.type === 'zoomReset') { this.zoomTarget = 1; done.push('reset zoom'); }
@@ -468,7 +479,7 @@ class App {
     return done;
   }
 
-  voiceCommand(text) {
+  voiceCommand(text, isFinal = true) {
     this.lastHeard = text;
     if (this.$('aiInput')) this.$('aiInput').value = text;
     const labels = this.model && isMachine(this.uploaded) && this.uploaded === this.ctl.state.index ? this.model.labels : [];
@@ -476,37 +487,12 @@ class App {
     const nluActs = parseNaturalVisualCommand(text, CATALOG, labels);
     const merged = [...nluActs];
     for (const ba of baseActs) if (!merged.some((m) => m.type === ba.type)) merged.push(ba);
+    if (!merged.length && !isFinal) return [];
     const done = this.applyActions(merged);
-
-    if (this.llm.status === 'ready') {
-      this.runWebLlmAsync(text, labels, done);
-    } else {
-      const msg = done.length ? `🎤 “${text}” → ${done.join(', ')}` : `🎤 “${text}” (try: “center on Panama”, “go to Arctic”, “rewind to 4 days”)`;
-      this.toast(msg);
-      if (this.$('aiStatus')) this.$('aiStatus').innerHTML = `✨ <b>Heard:</b> “${text}” ${done.length ? `→ <b>${done.join(', ')}</b>` : ''}`;
+    if (done.length || isFinal) {
+      this.toast(`🎤 “${text}”${done.length ? ' → ' + done.join(', ') : ''}`);
     }
     return done;
-  }
-
-  async runWebLlmAsync(text, labels, alreadyDone = []) {
-    const st = this.ctl.state, def = CATALOG[st.index];
-    if (this.$('aiStatus')) this.$('aiStatus').innerHTML = `🧠 <b>Thinking (${this.llm.modelId.split('-q4')[0]}):</b> “${text}”…`;
-    const res = await this.llm.interpret(text, {
-      catalog: CATALOG,
-      labels,
-      currentModel: def.name,
-      fact: def.fact || '',
-      explode: this.explode,
-    });
-    const extraActs = (res.actions || []).filter((a) => !alreadyDone.length || !['explode', 'assemble'].includes(a.type));
-    const moreDone = alreadyDone.length ? alreadyDone : this.applyActions(extraActs);
-    const summary = [...new Set([...alreadyDone, ...moreDone])];
-    const reply = res.reply || (summary.length ? `Executed: ${summary.join(', ')}` : '');
-    if (reply) {
-      this.say(reply);
-      this.toast(`🤖 ${reply}`);
-      if (this.$('aiStatus')) this.$('aiStatus').innerHTML = `🤖 <b>AI:</b> ${reply}${summary.length ? ` <span style="opacity:.75">[${summary.join(', ')}]</span>` : ''}`;
-    }
   }
 
   toggleVoice() {
@@ -514,7 +500,7 @@ class App {
     else {
       this.voiceOn = true;
       const ok = this.voice.start();
-      this.toast(ok ? '🎤 Listening: say “center on Panama”, “go to Arctic”, “rewind to 4 days”, “show 18 km”…' : '🎤 Speech recognition unavailable in this browser: type in the AI bar above!');
+      this.toast(ok ? '🎤 Instant voice keywords on: say “Panama”, “Arctic”, “Antarctica”, “Slice”, “Reset”…' : '🎤 Speech recognition unavailable: use the top buttons or Lat/Lon inputs!');
     }
     this.$('bVoice')?.classList.toggle('on', this.voiceOn);
     this.$('bAiMic')?.classList.toggle('on', this.voiceOn);
@@ -695,31 +681,43 @@ class App {
     });
     this.showCategory(this.activeCat);
 
-    const sel = this.$('aiModelSelect'), inp = this.$('aiInput'), bSend = this.$('bAiSend'), bLoad = this.$('bAiLoad'), bMic = this.$('bAiMic'), stEl = this.$('aiStatus');
-    if (sel) {
-      for (const m of WEBLLM_MODELS) {
-        const opt = document.createElement('option');
-        opt.value = m.id; opt.textContent = `${m.name} (${m.size})`;
-        sel.appendChild(opt);
+    const qChips = this.$('quickChips'), inp = this.$('aiInput'), bSend = this.$('bAiSend'), bMic = this.$('bAiMic');
+    const inLat = this.$('inLat'), inLon = this.$('inLon'), bCoordGo = this.$('bCoordGo');
+    if (qChips) {
+      for (const r of QUICK_REGIONS) {
+        const b = document.createElement('button');
+        b.className = 'qpill'; b.textContent = r.btn; b.title = `Center on ${r.label}`;
+        b.onclick = () => this.focusGeo(r.lat, r.lon, `🎯 ${r.label}`);
+        qChips.appendChild(b);
       }
-      sel.addEventListener('change', () => { this.llm.modelId = sel.value; });
+      for (const [label, fn] of [
+        ['✂ Slice', () => this.toggleCut()],
+        ['⏸ Spin', () => this.toggle('autoRotate', 'bRotate')],
+        ['↺ Reset', () => this.resetView()],
+      ]) {
+        const b = document.createElement('button');
+        b.className = 'qpill'; b.textContent = label;
+        b.onclick = fn;
+        qChips.appendChild(b);
+      }
     }
-    this.llm.onStatusChange = ({ status, text }) => {
-      if (stEl) stEl.innerHTML = status === 'ready' ? `🟢 <b>${text}</b> — speak or type any visual command or HYSPLIT question!` : `⚡ ${text}`;
-      if (bLoad) {
-        bLoad.textContent = status === 'ready' ? '✓ WebLLM Active' : status === 'loading' ? '⏳ Loading…' : '⚡ Load WebLLM';
-        bLoad.classList.toggle('ready', status === 'ready');
-      }
-    };
     if (bMic) bMic.onclick = () => this.toggleVoice();
-    if (bLoad) bLoad.onclick = () => this.llm.load(sel ? sel.value : this.llm.modelId);
-    const submitAi = () => {
+    const submitKeyword = () => {
       const q = inp?.value?.trim();
       if (!q) return;
-      this.voiceCommand(q);
+      this.voiceCommand(q, true);
     };
-    if (bSend) bSend.onclick = submitAi;
-    if (inp) inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitAi(); } });
+    if (bSend) bSend.onclick = submitKeyword;
+    if (inp) inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitKeyword(); } });
+    const goCoords = () => {
+      const lat = clamp(parseFloat(inLat?.value) || 0, -90, 90);
+      const lon = clamp(parseFloat(inLon?.value) || 0, -180, 180);
+      this.focusGeo(lat, lon, `🎯 Centered on ${lat.toFixed(1)}°, ${lon.toFixed(1)}°`);
+    };
+    if (bCoordGo) bCoordGo.onclick = goCoords;
+    for (const el of [inLat, inLon]) {
+      if (el) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); goCoords(); } });
+    }
   }
   showCategory(c) {
     this.activeCat = c;
@@ -756,6 +754,8 @@ class App {
     const targetPitch = clamp(deg(latDeg) - baseTilt, -1.3, 1.3);
     const targetYaw = -deg(lonDeg);
     this.geoTarget = { yaw: targetYaw, pitch: targetPitch, until: this.t + 1.4 };
+    if (this.$('inLat')) this.$('inLat').value = Math.round(latDeg);
+    if (this.$('inLon')) this.$('inLon').value = Math.round(lonDeg);
     this.toast(label);
   }
 

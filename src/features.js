@@ -53,18 +53,44 @@ export function parseCommand(text, catalog, labels = []) {
   return acts;
 }
 
-/** Continuous speech recognition (Chrome / Edge: webkitSpeechRecognition). */
+/** Continuous speech recognition (Chrome / Edge: webkitSpeechRecognition) with instant interim keyword firing. */
 export class Voice {
   constructor(onText) {
     this.SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
     this.supported = !!this.SR;
     this.onText = onText; this.on = false; this.rec = null; this.last = '';
+    this._lastFiredKey = ''; this._lastFiredAt = 0;
   }
   start() {
     if (!this.SR) return false;
     const rec = new this.SR();
-    rec.continuous = true; rec.interimResults = false; rec.lang = 'en-US';
-    rec.onresult = (e) => { const r = e.results[e.results.length - 1]; if (r.isFinal !== false) { this.last = r[0].transcript; this.onText(this.last); } };
+    rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1; rec.lang = 'en-US';
+    rec.onresult = (e) => {
+      const idx = e. results.length - 1;
+      const r = e.results[idx];
+      const text = (r[0]?.transcript || '').trim();
+      if (!text) return;
+      const now = performance.now();
+      const key = `${idx}:${text.toLowerCase()}`;
+      if (r.isFinal) {
+        if (this._lastFiredKey !== key || now - this._lastFiredAt > 1200) {
+          this.last = text;
+          this._lastFiredKey = key;
+          this._lastFiredAt = now;
+          this.onText(text, true);
+        }
+      } else {
+        // Fire immediately on interim stream if new words arrived (with 650ms debounce per result index)
+        if (now - this._lastFiredAt > 650 && this._lastFiredKey !== key) {
+          const matched = this.onText(text, false);
+          if (matched && matched.length > 0) {
+            this.last = text;
+            this._lastFiredKey = key;
+            this._lastFiredAt = now;
+          }
+        }
+      }
+    };
     rec.onend = () => { if (this.on) { try { rec.start(); } catch { /* already running */ } } };
     rec.onerror = (e) => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') this.on = false; };
     this.rec = rec; this.on = true;
