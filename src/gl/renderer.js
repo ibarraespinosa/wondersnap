@@ -3,6 +3,7 @@
 import * as S from './shaders.js';
 import { makeRng } from '../lib/rng.js';
 import { makeSeeds } from '../logic/simRef.js';
+import { buildCoastlineVertices, R_EARTH } from '../models/hysplit.js';
 
 // ---------------------------------------------------------------- column-major mat4 helpers
 export function perspective(fovyDeg, aspect, near, far) {
@@ -76,6 +77,12 @@ export class Renderer {
     const globe = globeLines(1.0);
     this.globeCount = globe.length / 3;
     this.globe = buf(globe);
+    const earthGlobe = globeLines(R_EARTH, 12, 24, 72);
+    this.earthGlobeCount = earthGlobe.length / 3;
+    this.earthGlobe = buf(earthGlobe);
+    const coast = buildCoastlineVertices(R_EARTH * 1.003);
+    this.coastCount = coast.length / 3;
+    this.coast = buf(coast);
 
     const attr = (loc, b, size, stride = 0, offset = 0, divisor = 0) => {
       gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.enableVertexAttribArray(loc);
@@ -87,6 +94,8 @@ export class Renderer {
     // instanced attributes need divisor 1, otherwise every instance draws the same trail (no GL error!)
     this.vTrails = this.state.map((b) => vao(() => { attr(0, b, 3, 24, 0, 1); attr(1, b, 3, 24, 12, 1); attr(2, this.tint, 3, 0, 0, 1); attr(3, this.pick, 1, 0, 0, 1); }));
     this.vGlobe = vao(() => attr(0, this.globe, 3));
+    this.vEarthGlobe = vao(() => attr(0, this.earthGlobe, 3));
+    this.vCoast = vao(() => attr(0, this.coast, 3));
     this.vEmpty = vao(() => {});
     this.tf = gl.createTransformFeedback();
 
@@ -182,8 +191,33 @@ export class Renderer {
 
     const L = this.pLines;
     gl.useProgram(L.p);
-    this.m4(L, 'u_mvp', d.globeMvp); this.v3(L, 'u_color', d.globeColor ?? d.color); this.f1(L, 'u_alpha', 0.12 * d.alpha);
-    gl.bindVertexArray(this.vGlobe); gl.drawArrays(gl.LINES, 0, this.globeCount);
+    if (d.isGeo && d.rot) {
+      const rCol = mat3Col(d.rot);
+      this.m4(L, 'u_mvp', d.projView);
+      this.m3(L, 'u_rot', rCol);
+      this.f1(L, 'u_use_rot', 1.0);
+      this.f1(L, 'u_scale', d.scale ?? 1.0);
+      this.f1(L, 'u_front_fade', 1.0);
+      // 1) Earth lat/lon graticule at R_EARTH
+      this.v3(L, 'u_color', [0.15, 0.45, 0.78]);
+      this.f1(L, 'u_alpha', 0.14 * d.alpha);
+      gl.bindVertexArray(this.vEarthGlobe);
+      gl.drawArrays(gl.LINES, 0, this.earthGlobeCount);
+      // 2) Natural Earth 110m 3D coastlines locked to the rotating globe
+      this.v3(L, 'u_color', [0.28, 0.88, 1.0]);
+      this.f1(L, 'u_alpha', 0.48 * d.alpha);
+      gl.bindVertexArray(this.vCoast);
+      gl.drawArrays(gl.LINES, 0, this.coastCount);
+    } else {
+      this.m4(L, 'u_mvp', d.globeMvp);
+      this.f1(L, 'u_use_rot', 0.0);
+      this.f1(L, 'u_scale', 1.0);
+      this.f1(L, 'u_front_fade', 0.0);
+      this.v3(L, 'u_color', d.globeColor ?? d.color);
+      this.f1(L, 'u_alpha', 0.12 * d.alpha);
+      gl.bindVertexArray(this.vGlobe);
+      gl.drawArrays(gl.LINES, 0, this.globeCount);
+    }
 
     if (d.trails) {
       const T = this.pTrails;

@@ -2,6 +2,8 @@
 // detection only runs when the camera delivered a new frame, and timestamps strictly increase.
 const VISION = '../node_modules/@mediapipe/tasks-vision/vision_bundle.mjs';
 const WASM = 'node_modules/@mediapipe/tasks-vision/wasm';
+const CDN_VISION = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+const CDN_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
 const MODEL = 'models/hand_landmarker.task';
 
 export class HandCamera {
@@ -28,8 +30,14 @@ export class HandCamera {
     this.video.muted = true; this.video.playsInline = true;
     await this.video.play();
     onStatus('Loading hand tracker…');
-    const { FilesetResolver, HandLandmarker } = await import(VISION);
-    const fileset = await FilesetResolver.forVisionTasks(WASM);
+    let FilesetResolver, HandLandmarker, wasmPath = WASM;
+    try {
+      ({ FilesetResolver, HandLandmarker } = await import(VISION));
+    } catch {
+      ({ FilesetResolver, HandLandmarker } = await import(CDN_VISION));
+      wasmPath = CDN_WASM;
+    }
+    const fileset = await FilesetResolver.forVisionTasks(wasmPath);
     const make = (delegate) => HandLandmarker.createFromOptions(fileset, {
       baseOptions: { modelAssetPath: MODEL, delegate },
       runningMode: 'VIDEO', numHands: 2,

@@ -8,10 +8,12 @@ import { ANATOMY2 } from './anatomy2.js';
 import { BODY } from './body.js';
 import { BIOLOGY } from './biology.js';
 import { VEHICLES2, MACHINES } from './machines.js';
+import { HYSPLIT_MODELS, buildHysplitModel } from './hysplit.js';
 import { makeRng } from '../lib/rng.js';
 import { build, flatten, allocate, shuffleIndex, normalize } from '../lib/sampling.js';
 
 export const CATALOG = [
+  ...HYSPLIT_MODELS,
   ...WONDERS.map((w) => ({ ...w, kind: 'wonder', category: 'Wonders', tilt: 0 })),
   ...[...ANATOMY, ...ANATOMY2, ...BODY].map((a) => ({ ...a, kind: 'machine', category: 'Anatomy' })),
   ...BIOLOGY.map((b) => ({ ...b, kind: 'machine', category: 'Biology' })),
@@ -20,7 +22,8 @@ export const CATALOG = [
   ...MACHINES.map((m) => ({ ...m, kind: 'machine', category: 'Machines' })),
 ];
 
-export const isMachine = (i) => CATALOG[i]?.kind === 'machine';
+export const isMachine = (i) => CATALOG[i]?.kind === 'machine' || CATALOG[i]?.kind === 'hysplit';
+export const isHysplit = (i) => CATALOG[i]?.kind === 'hysplit';
 
 const FIT_RADIUS = 1.18;   // the fully exploded view is scaled to fit this radius (globe = 1.0)
 
@@ -31,6 +34,10 @@ export function buildModel(index, n, seed = 0) {
   const t0 = performance.now();
   const offset = new Float32Array(n * 4);
   const tint = new Float32Array(n * 3);
+
+  if (def.kind === 'hysplit') {
+    return buildHysplitModel(index, def, n, rng);
+  }
 
   if (def.kind === 'wonder') {
     const target = build(def.build(), n, rng);

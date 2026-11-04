@@ -176,14 +176,27 @@ export const LINES_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 in_pos;
 uniform mat4 u_mvp;
-void main() { gl_Position = u_mvp * vec4(in_pos, 1.0); }`;
+uniform mat3 u_rot;
+uniform float u_use_rot;
+uniform float u_scale;
+out float v_facing;
+void main() {
+  vec3 p = u_use_rot > 0.5 ? (u_rot * (in_pos * u_scale)) : in_pos;
+  gl_Position = u_mvp * vec4(p, 1.0);
+  v_facing = normalize(p + vec3(0.0, 0.0, 1e-6)).z;
+}`;
 
 export const LINES_FS = `#version 300 es
 precision mediump float;
+in float v_facing;
 uniform vec3 u_color;
 uniform float u_alpha;
+uniform float u_front_fade;
 out vec4 f_color;
-void main() { f_color = vec4(u_color * u_alpha, 1.0); }`;
+void main() {
+  float fade = mix(1.0, smoothstep(-0.35, 0.15, v_facing) * 0.88 + 0.12, u_front_fade);
+  f_color = vec4(u_color * (u_alpha * fade), 1.0);
+}`;
 
 export const BG_VS = `#version 300 es
 precision highp float;

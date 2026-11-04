@@ -125,7 +125,7 @@ class App {
     this.color = [...CATALOG[CFG.start].color];
     this.explode = 0; this.manualExplode = 0; this.tintMix = 0; this.scale = 1;
     this.spin = 0; this.pitch = 0; this.grab = null; this.handRotate = true; this.handRotating = false;
-    this.dragYaw = 0; this.autoRotate = true; this.labelsOn = true; this.trails = CFG.trails;
+    this.dragYaw = 0; this.dragPitch = 0; this.autoRotate = true; this.labelsOn = true; this.trails = CFG.trails;
     this.zoom = 1; this.zoomTarget = 1; this.zoomGrab = null;
     this.pulse = 1; this.flow = 0; this.expHist = []; this.wasBusy = false;
     this.sel = -1; this.pulled = false; this.pullAmt = 0; this.hover = { li: -1, t0: 0 }; this.anchors = []; this.pointer = null; this.lostT = 0;
@@ -184,8 +184,11 @@ class App {
     if (st.targetDirty) {
       const m = this.store.get(st.index);
       if (m) {
+        const d0 = CATALOG[st.index];
         this.renderer.setModel(m); this.model = m; this.uploaded = st.index; this.uploadT = t; st.targetDirty = false;
-        this.manualExplode = this.quiz ? 1 : 0; this.sel = -1; this.pulled = false; this.zoomTarget = 1; this.prefetch();
+        this.manualExplode = this.quiz || d0.kind === 'hysplit' ? 1 : 0;
+        if (d0.isGeo) { this.spin = d0.viewYaw ?? 0; this.dragYaw = 0; this.dragPitch = 0; }
+        this.sel = -1; this.pulled = false; this.zoomTarget = 1; this.prefetch();
       } else this.store.request(st.index);
     }
     const ready = this.uploaded === st.index && !st.targetDirty;
@@ -235,16 +238,20 @@ class App {
     } else {
       this.grab = null;
       if (!(vis && (busyHand || twoHands))) {
-        if (this.autoRotate && this.sel < 0) this.spin += dt * 0.35 * (1 - this.explode);
-        if (this.explode > 0 && def.viewYaw !== undefined) {
-          const d = ((((def.viewYaw - this.spin) % Math.PI) + Math.PI * 1.5) % Math.PI) - Math.PI / 2;
-          this.spin += d * (1 - Math.exp(-dt * 3.5 * this.explode));
+        if (def.isGeo) {
+          if (this.autoRotate && this.sel < 0) this.spin += dt * 0.16;
+        } else {
+          if (this.autoRotate && this.sel < 0) this.spin += dt * 0.35 * (1 - this.explode);
+          if (this.explode > 0 && def.viewYaw !== undefined) {
+            const d = ((((def.viewYaw - this.spin) % Math.PI) + Math.PI * 1.5) % Math.PI) - Math.PI / 2;
+            this.spin += d * (1 - Math.exp(-dt * 3.5 * this.explode));
+          }
         }
         this.pitch *= Math.exp(-dt * 1.5);
       }
     }
     this.handRotating = handRot;
-    const rot = matMul(rotX(deg(def.tilt || 0) + this.pitch), rotY(this.spin + this.dragYaw));
+    const rot = matMul(rotX(clamp(deg(def.tilt || 0) + this.pitch + this.dragPitch, -1.35, 1.35)), rotY(this.spin + this.dragYaw));
 
     // 6. life: the heart beats (lub-dub), the lungs breathe; light pulses flow through them
     const life = formed ? smooth(0.5, 1.5, formT) : 0;
@@ -293,6 +300,7 @@ class App {
       projView: this.projView, globeMvp: mul4(this.projView, rotY4(0.1 * t)), color: this.color, tintMix: this.tintMix,
       alpha, trails: this.trails, trailLen: 0.06, pointPx: this.canvas.height * 0.012 * Math.sqrt(this.zoom), gain: this.gain,
       video: { has: this.hasVideo && this.camOn, dim: 0.65 }, sel, cutOn: this.cut.on && formed, cut: this.cut.x, flow: this.flow, time: t,
+      isGeo: !!def.isGeo, rot, scale,
     });
     this.drawOverlay(t, machine, formT, pointing);
     this.recorder.frame();
@@ -519,6 +527,42 @@ class App {
       g.globalAlpha = 0.9; g.fillStyle = '#fff'; g.font = `600 ${12 * dpr}px ui-sans-serif, system-ui, sans-serif`; g.textAlign = 'center';
       g.fillText('✂ cross-section', x, cy - rr * 1.1 - 8 * dpr); g.globalAlpha = 1;
     }
+    const def = CATALOG[ctl.state.index];
+    if (def?.kind === 'hysplit' && ctl.state.state === FORMED) {
+      // Draw Backward Travel Time (Age) Colorbar Legend
+      const bw = 270 * dpr, bh = 11 * dpr;
+      const bx = W - bw - 26 * dpr, by = H - 105 * dpr;
+      g.save();
+      g.fillStyle = 'rgba(8, 14, 28, 0.78)';
+      g.strokeStyle = 'rgba(120, 190, 255, 0.25)';
+      g.lineWidth = 1 * dpr;
+      g.beginPath();
+      g.roundRect(bx - 14 * dpr, by - 26 * dpr, bw + 28 * dpr, bh + 48 * dpr, 10 * dpr);
+      g.fill(); g.stroke();
+      const grad = g.createLinearGradient(bx, by, bx + bw, by);
+      grad.addColorStop(0.00, '#fff58c');
+      grad.addColorStop(0.14, '#ff7a24');
+      grad.addColorStop(0.36, '#f233a6');
+      grad.addColorStop(0.64, '#854cff');
+      grad.addColorStop(1.00, '#1fe6ff');
+      g.fillStyle = grad;
+      g.beginPath(); g.roundRect(bx, by, bw, bh, 5 * dpr); g.fill();
+      // Active backtrack horizon marker
+      const mx = bx + clamp(this.explode, 0, 1) * bw;
+      g.strokeStyle = '#ffffff'; g.lineWidth = 2 * dpr;
+      g.beginPath(); g.moveTo(mx, by - 3 * dpr); g.lineTo(mx, by + bh + 3 * dpr); g.stroke();
+      g.font = `600 ${11 * dpr}px ui-sans-serif, system-ui, sans-serif`;
+      g.fillStyle = '#e8f3ff'; g.textAlign = 'left';
+      g.fillText('BACKWARD TRAVEL TIME (COLOR = AGE)', bx, by - 11 * dpr);
+      g.font = `500 ${10 * dpr}px ui-sans-serif, system-ui, sans-serif`;
+      g.fillStyle = 'rgba(200, 222, 245, 0.92)';
+      const ticks = [[0, '0h (Rec)'], [0.14, '-2d'], [0.36, '-5d'], [0.64, '-9d'], [1.0, '-14d (-336h)']];
+      for (const [u, txt] of ticks) {
+        g.textAlign = u === 0 ? 'left' : u === 1 ? 'right' : 'center';
+        g.fillText(txt, bx + u * bw, by + bh + 13 * dpr);
+      }
+      g.restore();
+    }
     if (!this.anchors.length) return;
     const showAll = this.labelsOn && this.explode > 0.15;
     const items = this.anchors.filter((a) => showAll || a.li === this.sel);
@@ -618,7 +662,17 @@ class App {
     if ($('posePill').textContent !== pt) $('posePill').textContent = pt;
     const op = vis ? ctl.openness : 0;
     $('openBar').style.width = `${Math.round(op * 100)}%`; $('openPct').textContent = `${Math.round(op * 100)}%`;
-    $('explodePct').textContent = `${Math.round(this.explode * 100)}%`;
+    const expLabel = $('explodeBox').querySelector('.meter-head .k');
+    const expHint = $('explodeBox').querySelector('.hint');
+    if (def.kind === 'hysplit') {
+      if (expLabel) expLabel.textContent = 'Backtrack time';
+      if (expHint) expHint.textContent = 'Fist / 0% = at receptor · Open / 100% = -336h (14d backtrack)';
+      $('explodePct').textContent = `-${Math.round(this.explode * 336)}h (${(this.explode * 14).toFixed(1)}d)`;
+    } else {
+      if (expLabel) expLabel.textContent = 'Exploded view';
+      if (expHint) expHint.textContent = 'Open your hand to pull it apart · close it to assemble';
+      $('explodePct').textContent = `${Math.round(this.explode * 100)}%`;
+    }
     if (!this.sliderActive) $('explodeSlider').value = Math.round(this.explode * 100);
     const hot = st.state === IDLE || st.state === DISSOLVE ? 'snap' : st.state === SPHERE ? 'fist' : 'open';
     const gk = `${isM}|${hot}`;
@@ -742,9 +796,13 @@ class App {
     }, { passive: false });
     let drag = null;
     const px = (e) => [e.clientX * CFG.dpr, e.clientY * CFG.dpr];
-    this.canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, yaw: this.dragYaw, moved: false }; this.canvas.setPointerCapture(e.pointerId); });
+    this.canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, yaw: this.dragYaw, pitch: this.dragPitch, moved: false }; this.canvas.setPointerCapture(e.pointerId); });
     this.canvas.addEventListener('pointermove', (e) => {
-      if (drag) { if (Math.abs(e.clientX - drag.x) > 4) drag.moved = true; this.dragYaw = drag.yaw + (e.clientX - drag.x) * 0.008; }
+      if (drag) {
+        if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 4) drag.moved = true;
+        this.dragYaw = drag.yaw + (e.clientX - drag.x) * 0.008;
+        this.dragPitch = clamp(drag.pitch + (e.clientY - drag.y) * 0.006, -1.2, 1.2);
+      }
       else if (this.cut.on && !this.ctl.handVisible(this.t)) {
         const c0 = project(this.projView, [0, 0, 0]), rr = this.globeRadiusPx();
         this.cut.target = clamp((px(e)[0] - (c0[0] * 0.5 + 0.5) * this.overlay.width) / rr, -1.25, 1.25);
