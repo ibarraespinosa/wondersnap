@@ -11,6 +11,7 @@ import { HandCamera } from './hands.js';
 import { hand as synthHand } from './logic/synth.js';
 import { rotX, rotY, matMul, matVec, deg } from './lib/vec.js';
 import { parseCommand, Voice, speak, Recorder } from './features.js';
+import { WEBLLM_MODELS, WebLlmDirector, parseNaturalVisualCommand } from './llm.js';
 
 const qs = new URLSearchParams(location.search);
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
@@ -141,6 +142,7 @@ class App {
     this.quiz = null;
     this.cut = { on: false, x: 0.35, target: 0.35 };
     this.voice = new Voice((text) => this.voiceCommand(text)); this.voiceOn = false; this.spoken = []; this.lastHeard = '';
+    this.llm = new WebLlmDirector();
     this.recorder = new Recorder(this.canvas, this.overlay); this.lastRecording = null;
     this.t = 0; this.last = null; this.frames = 0; this.fps = 0; this._fpsN = 0; this._fpsT = 0;
     this.handSource = null; this.handSource2 = null; this.lastSynthT = -1; this.demo = null; this.demoHand = undefined;
@@ -423,15 +425,25 @@ class App {
     this.say(ok ? `Correct! ${L[li].info}` : `No, that's the ${L[li].label}.`);
   }
 
-  // ------------------------------------------------------------ voice
-  voiceCommand(text) {
-    this.lastHeard = text;
-    const acts = parseCommand(text, CATALOG, this.model && isMachine(this.uploaded) && this.uploaded === this.ctl.state.index ? this.model.labels : []);
+  // ------------------------------------------------------------ voice & in-browser WebLLM
+  applyActions(acts) {
     const st = this.ctl.state, done = [];
     for (const a of acts) {
-      if (a.type === 'model') { this.selectModel(CATALOG.findIndex((d) => d.name === a.name)); done.push(a.name); }
-      else if (a.type === 'part') { this.selectPart(a.index, 'voice'); done.push(this.model.labels[a.index].label); }
-      else if (a.type === 'explode') { this.manualExplode = 1; done.push('explode'); }
+      if (a.type === 'model') {
+        const idx = CATALOG.findIndex((d) => d.name.toLowerCase() === String(a.name).toLowerCase() || d.name.toLowerCase().includes(String(a.name).toLowerCase()));
+        if (idx >= 0) { this.selectModel(idx); done.push(CATALOG[idx].name); }
+      } else if (a.type === 'part') {
+        if (this.model?.labels?.[a.index]) { this.selectPart(a.index, 'voice'); done.push(this.model.labels[a.index].label); }
+      } else if (a.type === 'deselect') {
+        this.deselect(); done.push('show all');
+      } else if (a.type === 'focusGeo' && typeof a.lat === 'number' && typeof a.lon === 'number') {
+        this.focusGeo(a.lat, a.lon, `🧭 ${a.label || `${a.lat.toFixed(1)}°, ${a.lon.toFixed(1)}°`}`);
+        done.push(a.label || 'center globe');
+      } else if (a.type === 'setBacktrackHours' && typeof a.hours === 'number') {
+        const hrs = clamp(a.hours, 0, 336);
+        this.manualExplode = hrs / 336;
+        done.push(`-${Math.round(hrs)}h`);
+      } else if (a.type === 'explode') { this.manualExplode = 1; done.push('explode'); }
       else if (a.type === 'assemble') { this.manualExplode = 0; done.push('assemble'); }
       else if (a.type === 'next') { this.selectModel(st.index + 1); done.push('next'); }
       else if (a.type === 'prev') { this.selectModel(st.index - 1); done.push('previous'); }
@@ -442,6 +454,10 @@ class App {
       else if (a.type === 'cut') { this.toggleCut(); done.push('cut'); }
       else if (a.type === 'zoomIn') { this.zoomTarget = clamp(this.zoomTarget * 1.3, 0.5, 2.6); done.push('zoom in'); }
       else if (a.type === 'zoomOut') { this.zoomTarget = clamp(this.zoomTarget / 1.3, 0.5, 2.6); done.push('zoom out'); }
+      else if (a.type === 'zoomReset') { this.zoomTarget = 1; done.push('reset zoom'); }
+      else if (a.type === 'zoom' && typeof a.value === 'number') { this.zoomTarget = clamp(a.value, 0.5, 2.6); done.push(`zoom ${this.zoomTarget.toFixed(1)}×`); }
+      else if (a.type === 'setAutoRotate') { this.autoRotate = !!a.on; this.$('bRotate')?.classList.toggle('on', this.autoRotate); done.push(this.autoRotate ? 'spin on' : 'spin off'); }
+      else if (a.type === 'setLabels') { this.labelsOn = !!a.on; this.$('bLabels')?.classList.toggle('on', this.labelsOn); done.push(this.labelsOn ? 'labels on' : 'labels off'); }
       else if (a.type === 'rotate') { this.toggle('autoRotate', 'bRotate'); done.push('rotate'); }
       else if (a.type === 'record') { this.toggleRecord(); done.push('record'); }
       else if (a.type === 'describe') {
@@ -449,17 +465,59 @@ class App {
         this.say(L ? `${L.label}. ${L.info}.` : `${CATALOG[st.index].name}. ${CATALOG[st.index].fact || ''}`); done.push('describe');
       }
     }
-    this.toast(`🎤 “${text}”${done.length ? ' → ' + done.join(', ') : ' (not understood)'}`);
     return done;
   }
+
+  voiceCommand(text) {
+    this.lastHeard = text;
+    if (this.$('aiInput')) this.$('aiInput').value = text;
+    const labels = this.model && isMachine(this.uploaded) && this.uploaded === this.ctl.state.index ? this.model.labels : [];
+    const baseActs = parseCommand(text, CATALOG, labels);
+    const nluActs = parseNaturalVisualCommand(text, CATALOG, labels);
+    const merged = [...nluActs];
+    for (const ba of baseActs) if (!merged.some((m) => m.type === ba.type)) merged.push(ba);
+    const done = this.applyActions(merged);
+
+    if (this.llm.status === 'ready') {
+      this.runWebLlmAsync(text, labels, done);
+    } else {
+      const msg = done.length ? `🎤 “${text}” → ${done.join(', ')}` : `🎤 “${text}” (try: “center on Panama”, “go to Arctic”, “rewind to 4 days”)`;
+      this.toast(msg);
+      if (this.$('aiStatus')) this.$('aiStatus').innerHTML = `✨ <b>Heard:</b> “${text}” ${done.length ? `→ <b>${done.join(', ')}</b>` : ''}`;
+    }
+    return done;
+  }
+
+  async runWebLlmAsync(text, labels, alreadyDone = []) {
+    const st = this.ctl.state, def = CATALOG[st.index];
+    if (this.$('aiStatus')) this.$('aiStatus').innerHTML = `🧠 <b>Thinking (${this.llm.modelId.split('-q4')[0]}):</b> “${text}”…`;
+    const res = await this.llm.interpret(text, {
+      catalog: CATALOG,
+      labels,
+      currentModel: def.name,
+      fact: def.fact || '',
+      explode: this.explode,
+    });
+    const extraActs = (res.actions || []).filter((a) => !alreadyDone.length || !['explode', 'assemble'].includes(a.type));
+    const moreDone = alreadyDone.length ? alreadyDone : this.applyActions(extraActs);
+    const summary = [...new Set([...alreadyDone, ...moreDone])];
+    const reply = res.reply || (summary.length ? `Executed: ${summary.join(', ')}` : '');
+    if (reply) {
+      this.say(reply);
+      this.toast(`🤖 ${reply}`);
+      if (this.$('aiStatus')) this.$('aiStatus').innerHTML = `🤖 <b>AI:</b> ${reply}${summary.length ? ` <span style="opacity:.75">[${summary.join(', ')}]</span>` : ''}`;
+    }
+  }
+
   toggleVoice() {
     if (this.voiceOn) { this.voice.stop(); this.voiceOn = false; this.toast('🎤 Voice off'); }
     else {
       this.voiceOn = true;
       const ok = this.voice.start();
-      this.toast(ok ? '🎤 Listening: say “show me the heart”, “explode”, “next”, “quiz”…' : '🎤 Speech recognition is not available here: parts are still read aloud');
+      this.toast(ok ? '🎤 Listening: say “center on Panama”, “go to Arctic”, “rewind to 4 days”, “show 18 km”…' : '🎤 Speech recognition unavailable in this browser: type in the AI bar above!');
     }
-    this.$('bVoice').classList.toggle('on', this.voiceOn);
+    this.$('bVoice')?.classList.toggle('on', this.voiceOn);
+    this.$('bAiMic')?.classList.toggle('on', this.voiceOn);
   }
 
   // ------------------------------------------------------------ cut-away + recording
@@ -636,6 +694,32 @@ class App {
       chips.appendChild(b); this.chips[i] = b;
     });
     this.showCategory(this.activeCat);
+
+    const sel = this.$('aiModelSelect'), inp = this.$('aiInput'), bSend = this.$('bAiSend'), bLoad = this.$('bAiLoad'), bMic = this.$('bAiMic'), stEl = this.$('aiStatus');
+    if (sel) {
+      for (const m of WEBLLM_MODELS) {
+        const opt = document.createElement('option');
+        opt.value = m.id; opt.textContent = `${m.name} (${m.size})`;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener('change', () => { this.llm.modelId = sel.value; });
+    }
+    this.llm.onStatusChange = ({ status, text }) => {
+      if (stEl) stEl.innerHTML = status === 'ready' ? `🟢 <b>${text}</b> — speak or type any visual command or HYSPLIT question!` : `⚡ ${text}`;
+      if (bLoad) {
+        bLoad.textContent = status === 'ready' ? '✓ WebLLM Active' : status === 'loading' ? '⏳ Loading…' : '⚡ Load WebLLM';
+        bLoad.classList.toggle('ready', status === 'ready');
+      }
+    };
+    if (bMic) bMic.onclick = () => this.toggleVoice();
+    if (bLoad) bLoad.onclick = () => this.llm.load(sel ? sel.value : this.llm.modelId);
+    const submitAi = () => {
+      const q = inp?.value?.trim();
+      if (!q) return;
+      this.voiceCommand(q);
+    };
+    if (bSend) bSend.onclick = submitAi;
+    if (inp) inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitAi(); } });
   }
   showCategory(c) {
     this.activeCat = c;

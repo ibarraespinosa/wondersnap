@@ -71,6 +71,17 @@
 
   <div id="bigTitle" class="big-title"><div class="t"></div><div class="s"></div></div>
 
+  <section id="aiBar" class="ai-bar glass" aria-label="AI Voice and Visual Control">
+    <div class="ai-row">
+      <button id="bAiMic" class="ai-mic" title="Toggle voice control (M)">🎤</button>
+      <input id="aiInput" class="ai-input" type="text" placeholder="Say or type: “center on Panama”, “go to Arctic”, “rewind to 4 days ago”, “show 18 km”…" autocomplete="off">
+      <button id="bAiSend" class="ai-send" title="Run command">Ask AI</button>
+      <select id="aiModelSelect" class="ai-select" title="Select in-browser WebLLM model"></select>
+      <button id="bAiLoad" class="ai-load" title="Download & load open-weights LLM into browser WebGPU">⚡ Load WebLLM</button>
+    </div>
+    <div id="aiStatus" class="ai-status">✨ Instant Smart NLU active · Click <b>🎤</b> to speak or <b>⚡ Load WebLLM</b> for in-browser Qwen3.5 / Llama-3.2 AI</div>
+  </section>
+
   <nav id="catalog" class="catalog glass" aria-label="Models">
     <div id="catTabs" class="tabs" role="tablist"></div>
     <div id="catChips" class="chips"></div>
