@@ -681,7 +681,7 @@ class App {
     });
     this.showCategory(this.activeCat);
 
-    const qChips = this.$('quickChips'), inp = this.$('aiInput'), bSend = this.$('bAiSend'), bMic = this.$('bAiMic');
+    const qChips = this.$('quickChips'), tChips = this.$('timeChips');
     const inLat = this.$('inLat'), inLon = this.$('inLon'), bCoordGo = this.$('bCoordGo');
     if (qChips) {
       for (const r of QUICK_REGIONS) {
@@ -701,14 +701,20 @@ class App {
         qChips.appendChild(b);
       }
     }
-    if (bMic) bMic.onclick = () => this.toggleVoice();
-    const submitKeyword = () => {
-      const q = inp?.value?.trim();
-      if (!q) return;
-      this.voiceCommand(q, true);
-    };
-    if (bSend) bSend.onclick = submitKeyword;
-    if (inp) inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitKeyword(); } });
+    if (tChips) {
+      for (const [label, hrs] of [
+        ['0h (Rec)', 0],
+        ['-2d (-48h)', 48],
+        ['-5d (-120h)', 120],
+        ['-9d (-216h)', 216],
+        ['-14d (-336h)', 336],
+      ]) {
+        const b = document.createElement('button');
+        b.className = 'qpill'; b.textContent = label;
+        b.onclick = () => { this.manualExplode = hrs / 336; this.toast(`⏱ Backtrack horizon: -${hrs}h`); };
+        tChips.appendChild(b);
+      }
+    }
     const goCoords = () => {
       const lat = clamp(parseFloat(inLat?.value) || 0, -90, 90);
       const lon = clamp(parseFloat(inLon?.value) || 0, -180, 180);

@@ -73,10 +73,8 @@
 
   <section id="aiBar" class="ai-bar glass" aria-label="Quick Globe & Coordinate Controls">
     <div id="quickChips" class="ai-row chips-row"></div>
-    <div class="ai-row">
-      <button id="bAiMic" class="ai-mic" title="Instant voice keywords (M): say 'Panama', 'Arctic', 'Antarctica', 'Slice', 'Reset'…">🎤</button>
-      <input id="aiInput" class="ai-input" type="text" placeholder="Keyword (“panama”, “arctic”, “slice”, “reset”, “-72h”)" autocomplete="off">
-      <button id="bAiSend" class="ai-send" title="Run keyword">Go</button>
+    <div class="ai-row chips-row">
+      <div id="timeChips" class="ai-row"></div>
       <span class="coord-sep">|</span>
       <label class="coord-lbl">Lat°<input id="inLat" class="coord-in" type="number" step="1" min="-90" max="90" value="9"></label>
       <label class="coord-lbl">Lon°<input id="inLon" class="coord-in" type="number" step="1" min="-180" max="180" value="-80"></label>
@@ -111,7 +109,7 @@
       <button id="bHandRot" class="icon on" title="Hand rotation: twist your hand to turn the model (G)">🔄</button>
       <button id="bCut" class="icon" title="Cut-away cross-section (X)">✂</button>
       <button id="bQuiz" class="icon" title="Quiz: find the part (Q)">🎓</button>
-      <button id="bVoice" class="icon" title="Voice commands + read aloud (M)">🎤</button>
+      <button id="bVoice" class="icon" title="Voice commands + read aloud (M)" hidden>🎤</button>
       <button id="bRec" class="icon" title="Record a video (K)">⏺</button>
       <button id="bDemo" class="icon" title="Play demo (D)">▶</button>
       <button id="bHelp" class="icon" title="Keyboard help (H)">?</button>
