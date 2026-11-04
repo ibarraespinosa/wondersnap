@@ -6,7 +6,7 @@
 //   FORMED + machine: hand openness = exploded view (open = apart, fist = assembled) — handled by the app
 //   SPHERE/FORMED --peace ✌--> SPHERE + next model (wonders/machines; on HYSPLIT 3D Earth, ✌ centers Panama)
 //   SPHERE/FORMED --snap--> DISSOLVE --(1.2 s)--> IDLE
-import { OPEN, FIST, PEACE, THREE, POINT_HORIZ } from './gestures.js';
+import { OPEN, FIST, PEACE, HORIZ_1, HORIZ_2, HORIZ_3 } from './gestures.js';
 
 export const IDLE = 'idle', SPHERE = 'sphere', FORMED = 'formed', DISSOLVE = 'dissolve';
 export const SIM = { idle: 0, sphere: 1, formed: 2, dissolve: 3 };
@@ -35,14 +35,12 @@ export class WonderState {
       if (this.state === IDLE) { this.go(SPHERE, t); this.kick = true; this.fadeIn = true; this.emit('snap'); }
       else if (this.state === SPHERE || this.state === FORMED) { this.go(DISSOLVE, t); this.emit('dissolve'); }
     } else if (changed && pose === PEACE && (this.state === SPHERE || this.state === FORMED)) {
-      if (this.isGeo(this.index)) {
-        this.emit('view_panama');
-      } else {
-        this.advance(1); this.go(SPHERE, t); this.fadeIn = false; this.emit('next');
-      }
-    } else if (changed && pose === POINT_HORIZ && (this.state === SPHERE || this.state === FORMED) && this.isGeo(this.index)) {
+      this.advance(1); this.go(SPHERE, t); this.fadeIn = false; this.emit('next');
+    } else if (changed && pose === HORIZ_1 && (this.state === SPHERE || this.state === FORMED) && this.isGeo(this.index)) {
       this.emit('view_arctic');
-    } else if (changed && pose === THREE && (this.state === SPHERE || this.state === FORMED) && this.isGeo(this.index)) {
+    } else if (changed && pose === HORIZ_2 && (this.state === SPHERE || this.state === FORMED) && this.isGeo(this.index)) {
+      this.emit('view_panama');
+    } else if (changed && pose === HORIZ_3 && (this.state === SPHERE || this.state === FORMED) && this.isGeo(this.index)) {
       this.emit('view_antarctic');
     } else if (this.state === SPHERE && changed && pose === FIST) {
       this.go(FORMED, t); this.fadeIn = false; this.emit('form');

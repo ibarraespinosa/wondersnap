@@ -4,7 +4,7 @@
 // MediaPipe (hands) + WebGL2 (GPU particles via transform feedback) + procedural models.
 import { CATALOG, isMachine, isHysplit, buildModel } from './models/catalog.js';
 import { Controller } from './logic/controller.js';
-import { OPEN, FIST, PEACE, THREE, POINT, POINT_HORIZ, NONE } from './logic/gestures.js';
+import { OPEN, FIST, PEACE, POINT, HORIZ_1, HORIZ_2, HORIZ_3, NONE } from './logic/gestures.js';
 import { IDLE, SPHERE, FORMED, DISSOLVE, SIM } from './logic/state.js';
 import { Renderer, perspective, mul4, translate4, rotY4, project } from './gl/renderer.js';
 import { HandCamera } from './hands.js';
@@ -33,13 +33,15 @@ const CFG = {
 const HAND_EDGES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12],
   [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [17, 18], [18, 19], [19, 20], [0, 17]];
 const POSE_UI = {
-  [OPEN]: ['✋', 'Open hand'], [FIST]: ['✊', 'Fist'], [PEACE]: ['✌', '2 Fingers (Panama)'],
-  [THREE]: ['🤟', '3 Fingers (Antarctica)'], [POINT]: ['☝', 'Pointing'],
-  [POINT_HORIZ]: ['👉', 'Horiz. Point (Arctic)'], other: ['🤚', 'Moving'], [NONE]: ['·', 'No hand'],
+  [OPEN]: ['✋', 'Open hand'], [FIST]: ['✊', 'Fist'], [PEACE]: ['✌', 'Peace (Next)'],
+  [POINT]: ['☝', 'Pointing'], [HORIZ_1]: ['👉', '1 Horiz (Arctic)'],
+  [HORIZ_2]: ['👉✌', '2 Horiz (Panama)'], [HORIZ_3]: ['👉🤟', '3 Horiz (Antarctica)'],
+  other: ['🤚', 'Moving'], [NONE]: ['·', 'No hand'],
 };
 const POSE_COLOR = {
-  [OPEN]: '#66e0ff', [FIST]: '#ffd166', [PEACE]: '#ff6bd6', [THREE]: '#4deeea',
-  [POINT]: '#7dff9b', [POINT_HORIZ]: '#ffe66d', other: '#e8f1ff', [NONE]: '#e8f1ff',
+  [OPEN]: '#66e0ff', [FIST]: '#ffd166', [PEACE]: '#ff6bd6', [POINT]: '#7dff9b',
+  [HORIZ_1]: '#ffe66d', [HORIZ_2]: '#ff9f43', [HORIZ_3]: '#4deeea',
+  other: '#e8f1ff', [NONE]: '#e8f1ff',
 };
 const rgbCss = (c, a = 1) => `rgba(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(c[2] * 255)}, ${a})`;
 const CATEGORIES = [...new Set(CATALOG.map((d) => d.category))];
@@ -206,7 +208,7 @@ class App {
     if (formed) formT = t - Math.max(st.tState, this.uploadT);
     const vis = ctl.handVisible(t);
     const pointing = vis && (ctl.pose === POINT || ctl.rawPose === POINT);
-    const geoPresetPose = vis && [POINT_HORIZ, PEACE, THREE].includes(ctl.pose) && CATALOG[st.index]?.isGeo;
+    const geoPresetPose = vis && [HORIZ_1, HORIZ_2, HORIZ_3].includes(ctl.pose) && CATALOG[st.index]?.isGeo;
     const busyHand = pointing || geoPresetPose || ctl.pinch;              // pointing / pinching / geo preset must not move or explode the model
     const twoHands = vis && ctl.secondVisible(t) && formed;
 
@@ -647,9 +649,9 @@ class App {
         ['snap', '🫰', '<b>Snap</b> — summon particles / dissolve'],
         ['open', '✋', '<b>Open / Fist</b> — unfold / collapse backtrack time (0h → -336h)'],
         ['arctic', '👉', '<b>1 finger horizontal</b> (or <kbd>1</kbd>) — center on <b>Arctic</b>'],
-        ['peace', '✌', '<b>2 fingers</b> (or <kbd>2</kbd>) — center on <b>Panama / Americas</b>'],
-        ['antarctic', '🤟', '<b>3 fingers</b> (or <kbd>3</kbd>) — center on <b>Antarctica</b>'],
-        ['point', '☝', '<b>1 finger vertical</b> — point at a receptor / time window'],
+        ['panama', '👉✌', '<b>2 fingers horizontal</b> (or <kbd>2</kbd>) — center on <b>Panama</b>'],
+        ['antarctic', '👉🤟', '<b>3 fingers horizontal</b> (or <kbd>3</kbd>) — center on <b>Antarctica</b>'],
+        ['point', '☝', '<b>1 finger vertical</b> — point at receptor · <b>✌ vertical</b> — next model'],
         ['twist', '🔄', '<b>Twist / raise hand</b> — rotate & tilt Earth · 🙌 zoom'],
       ];
     }
