@@ -137,7 +137,6 @@ class App {
     this.spin = 0; this.pitch = 0; this.grab = null; this.handRotate = true; this.handRotating = false;
     this.dragYaw = 0; this.dragPitch = 0; this.geoTarget = null; this.autoRotate = true; this.labelsOn = true; this.trails = CFG.trails;
     this.coastColor = [0.35, 0.96, 1.0]; this.coastBright = 1.85;
-    this.dispMode = 1.0; this.flowPlay = true;
     this.zoom = 1; this.zoomTarget = 1; this.zoomGrab = null;
     this.pulse = 1; this.flow = 0; this.expHist = []; this.wasBusy = false;
     this.sel = -1; this.pulled = false; this.pullAmt = 0; this.hover = { li: -1, t0: 0 }; this.anchors = []; this.pointer = null; this.lostT = 0;
@@ -215,22 +214,12 @@ class App {
     const busyHand = pointing || geoPresetPose || ctl.pinch;              // pointing / pinching / geo preset must not move or explode the model
     const twoHands = vis && ctl.secondVisible(t) && formed;
 
-    // 3. exploded view / dispersion time: hand openness when a hand is visible, else auto-flow (Last -336h -> First 0h) or slider
+    // 3. exploded view: hand openness when a hand is visible, else slider / keys / wheel / voice / quiz
     let target = 0;
     if (formed && machine) {
-      const d0 = CATALOG[st.index];
       // only a hand in THIS frame steers it (a hand that just left keeps its last openness for a while)
-      if (vis && ctl.landmarks && !busyHand && !twoHands) {
-        target = smooth(0.12, 0.85, ctl.openness);
-        this.manualExplode = target;
-      } else if (d0?.kind === 'hysplit' && this.flowPlay && !this.sliderActive && !CFG.manual) {
-        // Move the dispersion cloud continuously from the LAST timestep (-336h, 1.0) to the FIRST (0h Receptor, 0.0)!
-        this.manualExplode -= dt * 0.095;
-        if (this.manualExplode < -0.08) this.manualExplode = 1.0;
-        target = clamp(this.manualExplode, 0, 1);
-      } else {
-        target = this.manualExplode;
-      }
+      if (vis && ctl.landmarks && !busyHand && !twoHands) { target = smooth(0.12, 0.85, ctl.openness); this.manualExplode = target; }
+      else target = this.manualExplode;
       // curling the fingers into a point / pinch briefly reads as "closing": restore the openest recent value
       this.expHist.push([t, target]);
       while (this.expHist[0][0] < t - 0.5) this.expHist.shift();
@@ -319,7 +308,7 @@ class App {
 
     const kick = st.consumeKick() ? 1 : 0;                                // one-frame impulse, read exactly once
     const sel = this.sel >= 0 && formed ? this.sel : -100;
-    this.renderer.step({ dt, time: t, mode, formT, kick, rot, sphereR: 0.85, explode: this.explode, scale, exCenter, sel, pull: [0, 0, 0.5 * this.pullAmt], dispMode: this.dispMode });
+    this.renderer.step({ dt, time: t, mode, formT, kick, rot, sphereR: 0.85, explode: this.explode, scale, exCenter, sel, pull: [0, 0, 0.5 * this.pullAmt] });
 
     // 8. colour morph + per-part colours once a machine has formed
     const k = 1 - Math.exp(-dt * 4);
@@ -332,7 +321,7 @@ class App {
       projView: this.projView, globeMvp: mul4(this.projView, rotY4(0.1 * t)), color: this.color, tintMix: this.tintMix,
       alpha, trails: this.trails, trailLen: 0.06, pointPx: this.canvas.height * 0.012 * Math.sqrt(this.zoom), gain: this.gain,
       video: { has: this.hasVideo && this.camOn, dim: 0.65 }, sel, cutOn: this.cut.on && formed, cut: this.cut.x, flow: this.flow, time: t,
-      isGeo: !!def.isGeo, rot, scale, coastColor: this.coastColor, coastBright: this.coastBright, dispMode: this.dispMode, explode: this.explode,
+      isGeo: !!def.isGeo, rot, scale, coastColor: this.coastColor, coastBright: this.coastBright,
     });
     this.drawOverlay(t, machine, formT, pointing);
     this.recorder.frame();
@@ -714,43 +703,16 @@ class App {
       }
     }
     if (tChips) {
-      const bFlow = document.createElement('button');
-      bFlow.className = 'qpill';
-      const syncFlowBtn = () => { bFlow.textContent = this.flowPlay ? '⏸ Flow (-14d→0h)' : '▶ Flow (-14d→0h)'; };
-      syncFlowBtn();
-      bFlow.onclick = () => {
-        this.flowPlay = !this.flowPlay;
-        syncFlowBtn();
-        this.toast(this.flowPlay ? '▶ Flowing dispersion: Last (-336h) → First (0h Receptor)' : '⏸ Paused dispersion flow');
-      };
-      tChips.appendChild(bFlow);
-
-      const bMode = document.createElement('button');
-      bMode.className = 'qpill';
-      const syncModeBtn = () => { bMode.textContent = this.dispMode > 0.5 ? '🌊 Cloud' : '🌈 Full Plume'; };
-      syncModeBtn();
-      bMode.onclick = () => {
-        this.dispMode = this.dispMode > 0.5 ? 0.0 : 1.0;
-        if (this.dispMode < 0.5) { this.flowPlay = false; this.manualExplode = 1.0; syncFlowBtn(); }
-        syncModeBtn();
-        this.toast(this.dispMode > 0.5 ? '🌊 Moving Dispersion Cloud (-336h → 0h)' : '🌈 Full 14-Day Cumulative Plume');
-      };
-      tChips.appendChild(bMode);
-
       for (const [label, hrs] of [
-        ['-14d', 336],
-        ['-9d', 216],
-        ['-5d', 120],
-        ['-2d', 48],
         ['0h (Rec)', 0],
+        ['-2d (-48h)', 48],
+        ['-5d (-120h)', 120],
+        ['-9d (-216h)', 216],
+        ['-14d (-336h)', 336],
       ]) {
         const b = document.createElement('button');
         b.className = 'qpill'; b.textContent = label;
-        b.onclick = () => {
-          this.flowPlay = false; syncFlowBtn();
-          this.manualExplode = hrs / 336;
-          this.toast(`⏱ Dispersion at -${hrs}h (${(hrs / 24).toFixed(1)}d)`);
-        };
+        b.onclick = () => { this.manualExplode = hrs / 336; this.toast(`⏱ Backtrack horizon: -${hrs}h`); };
         tChips.appendChild(b);
       }
     }

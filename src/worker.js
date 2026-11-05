@@ -6,10 +6,8 @@ self.onmessage = (e) => {
   const { id, index, n } = e.data;
   try {
     const m = buildModel(index, n);
-    const out = { id, index, n, target: m.target, offset: m.offset, tint: m.tint, pick: m.pick, traj: m.traj || null, trajRows: m.trajRows || 0, labels: m.labels, groups: m.groups, fitScale: m.fitScale, exCenter: m.exCenter, ms: m.ms };
-    const xfer = [m.target.buffer, m.offset.buffer, m.tint.buffer, m.pick.buffer];
-    if (m.traj?.buffer) xfer.push(m.traj.buffer);
-    self.postMessage(out, xfer);
+    const out = { id, index, n, target: m.target, offset: m.offset, tint: m.tint, pick: m.pick, labels: m.labels, groups: m.groups, fitScale: m.fitScale, exCenter: m.exCenter, ms: m.ms };
+    self.postMessage(out, [m.target.buffer, m.offset.buffer, m.tint.buffer, m.pick.buffer]);
   } catch (err) {
     self.postMessage({ id, index, error: String((err && err.stack) || err) });
   }

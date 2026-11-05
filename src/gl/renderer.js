@@ -3,7 +3,7 @@
 import * as S from './shaders.js';
 import { makeRng } from '../lib/rng.js';
 import { makeSeeds } from '../logic/simRef.js';
-import { buildCoastlineVertices, R_EARTH, TRAJ_TEX_WIDTH } from '../models/hysplit.js';
+import { buildCoastlineVertices, R_EARTH } from '../models/hysplit.js';
 
 // ---------------------------------------------------------------- column-major mat4 helpers
 export function perspective(fovyDeg, aspect, near, far) {
@@ -104,12 +104,6 @@ export class Renderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, 1, 1, 0, gl.RGB, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0]));
     for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
     this.texSize = [1, 1];
-
-    this.trajTex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, this.trajTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 1, 1, 0, gl.RGBA, gl.FLOAT, new Float32Array(4));
-    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
-    this.hasTraj = false;
   }
 
   program(vs, fs, varyings = null) {
@@ -143,14 +137,6 @@ export class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.tint); gl.bufferSubData(gl.ARRAY_BUFFER, 0, model.tint);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.pick); gl.bufferSubData(gl.ARRAY_BUFFER, 0, model.pick || new Float32Array(model.target.length / 3).fill(-1));
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
-    if (model.traj && model.trajRows > 0) {
-      gl.bindTexture(gl.TEXTURE_2D, this.trajTex);
-      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, TRAJ_TEX_WIDTH, model.trajRows, 0, gl.RGBA, gl.FLOAT, model.traj);
-      this.hasTraj = true;
-    } else {
-      this.hasTraj = false;
-    }
   }
 
   uploadVideo(video) {
@@ -169,10 +155,6 @@ export class Renderer {
     this.f1(P, 'u_kick', u.kick); this.m3(P, 'u_rot', mat3Col(u.rot)); this.f1(P, 'u_sphere_r', u.sphereR ?? 0.85);
     this.f1(P, 'u_explode', u.explode ?? 0); this.f1(P, 'u_scale', u.scale ?? 1); this.v3(P, 'u_excenter', u.exCenter ?? [0, 0, 0]);
     this.f1(P, 'u_sel', u.sel ?? -100); this.v3(P, 'u_pull', u.pull ?? [0, 0, 0]);
-    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.trajTex);
-    this.i1(P, 'u_traj', 1);
-    this.f1(P, 'u_has_traj', this.hasTraj ? 1.0 : 0.0);
-    this.f1(P, 'u_disp_mode', this.hasTraj ? (u.dispMode ?? 1.0) : 0.0);
     // WebGL forbids a buffer being bound to TRANSFORM_FEEDBACK_BUFFER and any other target at once
     // (INVALID_OPERATION, and every later step silently does nothing) — so drop the generic binding first.
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
@@ -262,8 +244,6 @@ export class Renderer {
     this.f1(Pp, 'u_alpha', d.alpha); this.f1(Pp, 'u_point_px', d.pointPx); this.f1(Pp, 'u_gain', d.gain ?? 0.22);
     this.f1(Pp, 'u_sel', d.sel ?? -100); this.f1(Pp, 'u_cut_on', d.cutOn ? 1 : 0); this.f1(Pp, 'u_cut', d.cut ?? 0);
     this.f1(Pp, 'u_flow', d.flow ?? 0); this.f1(Pp, 'u_time', d.time ?? 0);
-    this.f1(Pp, 'u_disp_mode', this.hasTraj ? (d.dispMode ?? 1.0) : 0.0);
-    this.f1(Pp, 'u_explode', d.explode ?? 0);
     gl.bindVertexArray(this.vPoints[this.cur]); gl.drawArrays(gl.POINTS, 0, this.n);
     gl.bindVertexArray(null);
   }
