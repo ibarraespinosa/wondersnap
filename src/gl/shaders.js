@@ -22,6 +22,9 @@ uniform float u_scale;     // zoom-out that keeps the exploded view on screen
 uniform vec3  u_excenter;  // centre of the fully exploded cloud
 uniform float u_sel;       // selected part id (-100 = none)
 uniform vec3  u_pull;      // world-space pull applied to the selected part (pinch = pull it out toward you)
+uniform sampler2D u_traj;  // 8-keyframe 3D dispersion trajectory texture (4096 x rows, RGBA16F)
+uniform float u_has_traj;  // 1.0 for HYSPLIT 4D dispersion models
+uniform float u_disp_mode; // 1.0 = moving dispersion cloud (Last <-> First), 0.0 = cumulative plume along path
 
 out vec3 out_pos;
 out vec3 out_vel;
@@ -70,9 +73,32 @@ void main() {
     float delay = in_seed.w * STAGGER;
     float e = smoothstep(delay, delay + 0.35, u_form_t);
     float k = K_FORM * e;
-    float s = clamp((u_explode - in_offset.w) / max(1.0 - in_offset.w, 1e-3), 0.0, 1.0);
-    s = s * s * (3.0 - 2.0 * s);
-    vec3 tgt = u_rot * ((in_target + in_offset.xyz * s - u_excenter * u_explode) * u_scale);
+    vec3 modelPos;
+    if (u_has_traj > 0.5) {
+      if (in_offset.w < -0.5) {
+        modelPos = in_target;                // receptor beacon stays anchored at receptor
+      } else {
+        int pid = gl_VertexID;
+        int row = pid >> 9;
+        int col = (pid & 511) << 3;
+        float stage = u_disp_mode > 0.5
+          ? clamp(u_explode * 7.0 + (in_seed.w - 0.5) * 1.15, 0.0, 7.0)
+          : min(u_explode * 7.0, in_offset.w * 7.0);
+        int k0 = clamp(int(floor(stage)), 0, 6);
+        float frac = smoothstep(0.0, 1.0, stage - float(k0));
+        vec3 p0 = texelFetch(u_traj, ivec2(col + k0, row), 0).xyz;
+        vec3 p1 = texelFetch(u_traj, ivec2(col + k0 + 1, row), 0).xyz;
+        vec3 pMix = mix(p0, p1, frac);
+        float rMix = length(pMix);
+        float rShell = mix(length(p0), length(p1), frac);
+        modelPos = rMix > 1e-4 ? pMix * (rShell / rMix) : pMix;
+      }
+    } else {
+      float s = clamp((u_explode - in_offset.w) / max(1.0 - in_offset.w, 1e-3), 0.0, 1.0);
+      s = s * s * (3.0 - 2.0 * s);
+      modelPos = in_target + in_offset.xyz * s - u_excenter * u_explode;
+    }
+    vec3 tgt = u_rot * (modelPos * u_scale);
     if (abs(in_group - u_sel) < 0.5) tgt += u_pull;
     acc = k * (tgt - p) - 2.0 * sqrt(k) * v + (1.0 - e) * (tang * SWIRL - v * DAMP);
   } else {                                   // dissolve: blow outward
@@ -107,14 +133,29 @@ uniform float u_cut_on;      // cut-away: hide everything beyond the plane x = u
 uniform float u_cut;
 uniform float u_flow;        // travelling pulses of light (blood / air flow)
 uniform float u_time;
+uniform float u_disp_mode;   // 1.0 = dynamic time-color as dispersion cloud moves
+uniform float u_explode;     // current dispersion time position 0..1
 out vec3 v_col;
 out float v_a;
+
+vec3 timeColor(float u) {
+  u = clamp(u, 0.0, 1.0);
+  if (u < 0.14) return mix(vec3(1.00, 0.96, 0.55), vec3(1.00, 0.48, 0.14), u / 0.14);
+  if (u < 0.36) return mix(vec3(1.00, 0.48, 0.14), vec3(0.95, 0.20, 0.65), (u - 0.14) / 0.22);
+  if (u < 0.64) return mix(vec3(0.95, 0.20, 0.65), vec3(0.52, 0.30, 1.00), (u - 0.36) / 0.28);
+  return mix(vec3(0.52, 0.30, 1.00), vec3(0.12, 0.90, 1.00), (u - 0.64) / 0.36);
+}
+
 void main() {
   if (u_cut_on > 0.5 && in_pos.x > u_cut) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 1.0; v_col = vec3(0.0); v_a = 0.0; return; }
   gl_Position = u_mvp * vec4(in_pos, 1.0);
   gl_PointSize = clamp(u_point_px / gl_Position.w, 1.0, 12.0);
   float speed = length(in_vel);
-  vec3 base = mix(u_color, in_tint, u_tint_mix);
+  bool isBeacon = (in_tint.r + in_tint.g + in_tint.b) > 2.72;
+  vec3 pTint = (u_disp_mode > 0.5 && !isBeacon)
+    ? timeColor(u_explode + (fract(float(gl_VertexID) * 0.6180339) - 0.5) * 0.16)
+    : in_tint;
+  vec3 base = mix(u_color, pTint, u_tint_mix);
   if (u_sel > -50.0) base *= abs(in_group - u_sel) < 0.5 ? 1.8 : 0.25;
   base *= 1.0 + u_flow * 1.6 * pow(max(0.0, sin(in_pos.y * 9.0 - u_time * 5.0)), 14.0);
   float edge = u_cut_on * (1.0 - smoothstep(0.0, 0.03, u_cut - in_pos.x));      // glowing cross-section face

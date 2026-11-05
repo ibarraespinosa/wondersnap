@@ -207,6 +207,10 @@ const SINGLE_TIME_WINDOWS = [
  *      * offset.w = normalized backward time stage (0..0.82) so opening hand unfolds time!
  *      * tint = RGB from backward travel time (0h white-gold -> -336h ice-cyan)
  */
+export const TRAJ_STEPS = 8; // k=0 (0h Receptor), k=1 (-48h), k=2 (-96h), ..., k=7 (-336h Last)
+export const TRAJ_PER_ROW = 512;
+export const TRAJ_TEX_WIDTH = TRAJ_PER_ROW * TRAJ_STEPS; // 4096 texels wide
+
 export function buildHysplitModel(index, def, n, rng) {
   const t0 = performance.now();
   const rand = typeof rng === 'function' ? rng : rng.random;
@@ -214,6 +218,15 @@ export function buildHysplitModel(index, def, n, rng) {
   const offset = new Float32Array(n * 4);
   const tint = new Float32Array(n * 3);
   const pick = new Float32Array(n).fill(-1);
+
+  const trajRows = Math.ceil(n / TRAJ_PER_ROW);
+  const traj = new Float32Array(trajRows * TRAJ_TEX_WIDTH * 4);
+  const setTraj = (pid, step, p) => {
+    const row = pid >> 9;
+    const col = ((pid & 511) << 3) + step;
+    const idx = (row * TRAJ_TEX_WIDTH + col) << 2;
+    traj[idx] = p[0]; traj[idx + 1] = p[1]; traj[idx + 2] = p[2]; traj[idx + 3] = 1.0;
+  };
 
   // Coastlines are rendered as crisp 3D GL_LINES in renderer.js (no duplicate coastline particles)
   const nCoast = 0;
@@ -239,7 +252,7 @@ export function buildHysplitModel(index, def, n, rng) {
     count: 0,
   }));
 
-  // 2. Sample Receptor beacon stars + vertical atmospheric sonde lines
+  // 1. Sample Receptor beacon stars + vertical atmospheric sonde lines
   const beaconPerRun = Math.max(1, Math.floor(nBeaconTotal / runs.length));
   runs.forEach((run, ri) => {
     const rec = run.receptor;
@@ -250,11 +263,9 @@ export function buildHysplitModel(index, def, n, rng) {
     for (let k = 0; k < count && cursor < nCoast + nBeaconTotal; k++) {
       let p;
       if (k < count * 0.35) {
-        // Vertical sonde column from ground (0 km) to receptor altitude
         const f = rand();
         p = latLonAltToVec3(rec.lat, rec.lon, rec.alt_km * f);
       } else {
-        // Glowing star cluster right at the receptor
         const jLat = (rand() - 0.5) * 0.5;
         const jLon = (rand() - 0.5) * 0.5;
         const jAlt = (rand() - 0.5) * 0.6;
@@ -262,14 +273,18 @@ export function buildHysplitModel(index, def, n, rng) {
       }
       const j = cursor * 3, o = cursor * 4;
       target[j] = p[0]; target[j + 1] = p[1]; target[j + 2] = p[2];
-      offset[o] = 0; offset[o + 1] = 0; offset[o + 2] = 0; offset[o + 3] = 0;
+      // offset.w = -1 flags fixed receptor beacon particles so they stay at the receptor
+      offset[o] = 0; offset[o + 1] = 0; offset[o + 2] = 0; offset[o + 3] = -1.0;
       tint[j] = 1.0; tint[j + 1] = 0.97; tint[j + 2] = 0.78;
       pick[cursor] = gIdx;
+      for (let s = 0; s < TRAJ_STEPS; s++) setTraj(cursor, s, p);
       cursor++;
     }
   });
 
-  // 3. Sample 4D Backward Plume particles weighted by concentration sensitivity
+  // 2. Build 8-step (0h -> -48h -> -96h -> -144h -> -192h -> -240h -> -288h -> -336h)
+  //    spatially-coherent dispersion clouds for each run so particles travel as a true
+  //    evolving dispersion cloud from the last timestep (-336h) to the first (0h Receptor)!
   const plumePerRun = Math.floor(nPlumeTotal / runs.length);
   runs.forEach((run, ri) => {
     const rec = run.receptor;
@@ -277,41 +292,83 @@ export function buildHysplitModel(index, def, n, rng) {
     const lats = run.lat, lons = run.lon, alts = run.alt_km, ages = run.age_h, weights = run.weight;
     const nVox = lats.length;
 
-    // Build cumulative distribution from voxel weights
-    const cdf = new Float64Array(nVox);
-    let totalW = 0;
-    for (let v = 0; v < nVox; v++) {
-      totalW += weights[v];
-      cdf[v] = totalW;
+    // Partition voxels into 7 sequential time bins (each 48h wide: 0..48h up to 288..336h)
+    const bins = [];
+    const nBins = TRAJ_STEPS - 1;
+    const binWidth = maxAge / nBins;
+    for (let b = 0; b < nBins; b++) {
+      const tLo = b * binWidth, tHi = (b + 1) * binWidth + (b === nBins - 1 ? 1.0 : 0.0);
+      const idxs = [];
+      for (let v = 0; v < nVox; v++) {
+        if (ages[v] >= tLo && ages[v] < tHi) idxs.push(v);
+      }
+      if (!idxs.length) {
+        for (let v = 0; v < nVox; v++) idxs.push(v);
+      }
+      // Sort voxels within this timestep by stream position (latitude + altitude + unwrapped lon)
+      // so quantile q in bin[b] connects smoothly to quantile q in bin[b+1]
+      idxs.sort((a, bIdx) => (lats[a] + alts[a] * 0.4) - (lats[bIdx] + alts[bIdx] * 0.4));
+      const cdf = new Float64Array(idxs.length);
+      let sumW = 0;
+      for (let m = 0; m < idxs.length; m++) {
+        sumW += weights[idxs[m]];
+        cdf[m] = sumW;
+      }
+      bins.push({ idxs, cdf, totalW: sumW || 1 });
     }
+
+    const sampleBinAtQuantile = (b, q) => {
+      const bin = bins[b];
+      const targetW = q * bin.totalW;
+      let lo = 0, hi = bin.cdf.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (bin.cdf[mid] < targetW) lo = mid + 1;
+        else hi = mid;
+      }
+      return bin.idxs[lo];
+    };
 
     const myCount = ri === runs.length - 1 ? (n - cursor) : plumePerRun;
     for (let k = 0; k < myCount && cursor < n; k++) {
-      // Binary search in CDF
-      const rVal = rand() * totalW;
-      let lo = 0, hi = nVox - 1;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (cdf[mid] < rVal) lo = mid + 1;
-        else hi = mid;
+      // Streamline quantile q in [0, 1] with turbulent dispersion random walk across timesteps
+      let q = rand();
+
+      // Step 0: At the Receptor (0h)
+      const p0 = latLonAltToVec3(
+        rec.lat + (rand() - 0.5) * 0.35,
+        rec.lon + (rand() - 0.5) * 0.35,
+        Math.max(0.2, rec.alt_km + (rand() - 0.5) * 0.5)
+      );
+      setTraj(cursor, 0, p0);
+
+      // Assigned characteristic stage uAge in [0.02, 0.99] for cumulative plume & group picking
+      const uAge = 0.02 + 0.97 * rand();
+      const charAge = uAge * maxAge;
+      const charBin = Math.min(nBins - 1, Math.floor(uAge * nBins));
+      let pChar = p0, charLat = rec.lat, charLon = rec.lon, charAlt = rec.alt_km;
+
+      for (let b = 0; b < nBins; b++) {
+        // Turbulent diffusion across the dispersion cloud between consecutive 48h steps
+        q = Math.max(0.0001, Math.min(0.9999, q + (rand() - 0.5) * 0.16));
+        const vIdx = sampleBinAtQuantile(b, q);
+        const lat = Math.max(-89.8, Math.min(89.8, lats[vIdx] + (rand() - 0.5) * 0.38));
+        const lon = lons[vIdx] + (rand() - 0.5) * 0.38;
+        const alt = Math.max(0.1, alts[vIdx] + (rand() - 0.5) * 0.9);
+        const pb = latLonAltToVec3(lat, lon, alt);
+        setTraj(cursor, b + 1, pb);
+        if (b === charBin) {
+          pChar = pb; charLat = lat; charLon = lon; charAlt = alt;
+        }
       }
 
-      // Sub-grid 4D jitter within the HYSPLIT (0.25° x 0.25° x 1 km x 1h) voxel
-      const lat = Math.max(-89.8, Math.min(89.8, lats[lo] + (rand() - 0.5) * 0.32));
-      const lon = lons[lo] + (rand() - 0.5) * 0.32;
-      const alt = Math.max(0.1, alts[lo] + (rand() - 0.5) * 0.9);
-      const age = Math.max(0.1, Math.min(maxAge, ages[lo] + (rand() - 0.5) * 1.2));
-
-      const pPlume = latLonAltToVec3(lat, lon, alt);
-      const stage = Math.min(0.82, (age / maxAge) * 0.82);
-      const col = timeToRgb(age, maxAge);
-
+      const col = timeToRgb(charAge, maxAge);
       let gIdx = 0;
       if (isMulti) {
         gIdx = ri;
       } else {
         for (let w = 0; w < SINGLE_TIME_WINDOWS.length; w++) {
-          if (age >= SINGLE_TIME_WINDOWS[w].lo && age < SINGLE_TIME_WINDOWS[w].hi) {
+          if (charAge >= SINGLE_TIME_WINDOWS[w].lo && charAge < SINGLE_TIME_WINDOWS[w].hi) {
             gIdx = w;
             break;
           }
@@ -319,15 +376,13 @@ export function buildHysplitModel(index, def, n, rng) {
       }
 
       const j = cursor * 3, o = cursor * 4;
-      // At u_explode = 0 (Fist / 0h), particle sits at its Receptor (`recPos`).
-      // As u_explode -> 1 (Open Hand / -336h), particle travels to `pPlume`!
-      target[j]     = recPos[0];
-      target[j + 1] = recPos[1];
-      target[j + 2] = recPos[2];
-      offset[o]     = pPlume[0] - recPos[0];
-      offset[o + 1] = pPlume[1] - recPos[1];
-      offset[o + 2] = pPlume[2] - recPos[2];
-      offset[o + 3] = stage;
+      target[j]     = p0[0];
+      target[j + 1] = p0[1];
+      target[j + 2] = p0[2];
+      offset[o]     = pChar[0] - p0[0];
+      offset[o + 1] = pChar[1] - p0[1];
+      offset[o + 2] = pChar[2] - p0[2];
+      offset[o + 3] = uAge;
       tint[j]       = col[0];
       tint[j + 1]   = col[1];
       tint[j + 2]   = col[2];
@@ -335,15 +390,15 @@ export function buildHysplitModel(index, def, n, rng) {
 
       const st = groupStats[gIdx];
       st.recPos = recPos;
-      st.sumPlume[0] += pPlume[0];
-      st.sumPlume[1] += pPlume[1];
-      st.sumPlume[2] += pPlume[2];
-      st.sumLat += lat;
-      const lonRad = (lon * Math.PI) / 180;
+      st.sumPlume[0] += pChar[0];
+      st.sumPlume[1] += pChar[1];
+      st.sumPlume[2] += pChar[2];
+      st.sumLat += charLat;
+      const lonRad = (charLon * Math.PI) / 180;
       st.sumLonSin += Math.sin(lonRad);
       st.sumLonCos += Math.cos(lonRad);
-      st.sumAlt += alt;
-      st.sumAge += age;
+      st.sumAlt += charAlt;
+      st.sumAge += charAge;
       st.count++;
 
       cursor++;
@@ -422,6 +477,8 @@ export function buildHysplitModel(index, def, n, rng) {
     offset,
     tint,
     pick,
+    traj,
+    trajRows,
     labels,
     groups: labels.map((l) => l.label),
     fitScale: 1.0,           // Keep Earth radius constant during backward-time unfolding!
