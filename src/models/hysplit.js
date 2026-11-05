@@ -207,6 +207,78 @@ const SINGLE_TIME_WINDOWS = [
  *      * offset.w = normalized backward time stage (0..0.82) so opening hand unfolds time!
  *      * tint = RGB from backward travel time (0h white-gold -> -336h ice-cyan)
  */
+export const CENTERLINE_STEPS = 32;
+
+function buildRunCenterline(run, maxAge = 336) {
+  const rec = run.receptor;
+  const recPos = latLonAltToVec3(rec.lat, rec.lon, rec.alt_km);
+  const lats = run.lat, lons = run.lon, alts = run.alt_km, ages = run.age_h, weights = run.weight;
+  const nVox = lats.length;
+  const d2r = Math.PI / 180;
+  const rawLat = new Float64Array(CENTERLINE_STEPS);
+  const rawLon = new Float64Array(CENTERLINE_STEPS);
+  const rawAlt = new Float64Array(CENTERLINE_STEPS);
+  rawLat[0] = rec.lat; rawLon[0] = rec.lon; rawAlt[0] = rec.alt_km;
+
+  const dt = maxAge / (CENTERLINE_STEPS - 1);
+  for (let m = 1; m < CENTERLINE_STEPS; m++) {
+    const tCenter = m * dt;
+    let sumW = 0, sumLat = 0, sumSin = 0, sumCos = 0, sumAlt = 0;
+    const halfWin = dt * 0.85;
+    for (let v = 0; v < nVox; v++) {
+      const da = Math.abs(ages[v] - tCenter);
+      if (da <= halfWin) {
+        const w = weights[v] * (1.0 - da / (halfWin + 1e-3));
+        sumW += w;
+        sumLat += w * lats[v];
+        sumSin += w * Math.sin(lons[v] * d2r);
+        sumCos += w * Math.cos(lons[v] * d2r);
+        sumAlt += w * alts[v];
+      }
+    }
+    if (sumW > 0) {
+      rawLat[m] = sumLat / sumW;
+      rawLon[m] = Math.atan2(sumSin / sumW, sumCos / sumW) / d2r;
+      rawAlt[m] = sumAlt / sumW;
+    } else {
+      rawLat[m] = rawLat[m - 1];
+      rawLon[m] = rawLon[m - 1];
+      rawAlt[m] = rawAlt[m - 1];
+    }
+  }
+
+  // Smooth the 3D centerline curve across steps 1..30 while keeping step 0 anchored at recPos
+  const pts = new Array(CENTERLINE_STEPS);
+  pts[0] = recPos;
+  for (let m = 1; m < CENTERLINE_STEPS; m++) {
+    pts[m] = latLonAltToVec3(rawLat[m], rawLon[m], rawAlt[m]);
+  }
+  for (let pass = 0; pass < 2; pass++) {
+    const copy = pts.map((p) => [...p]);
+    for (let m = 1; m < CENTERLINE_STEPS - 1; m++) {
+      const rOrig = Math.hypot(copy[m][0], copy[m][1], copy[m][2]);
+      const mx = 0.22 * copy[m - 1][0] + 0.56 * copy[m][0] + 0.22 * copy[m + 1][0];
+      const my = 0.22 * copy[m - 1][1] + 0.56 * copy[m][1] + 0.22 * copy[m + 1][1];
+      const mz = 0.22 * copy[m - 1][2] + 0.56 * copy[m][2] + 0.22 * copy[m + 1][2];
+      const rMix = Math.hypot(mx, my, mz) || 1;
+      pts[m] = [(mx * rOrig) / rMix, (my * rOrig) / rMix, (mz * rOrig) / rMix];
+    }
+  }
+  return pts;
+}
+
+function evalCenterline(pts, tau) {
+  const u = Math.max(0, Math.min(1, tau)) * (CENTERLINE_STEPS - 1);
+  const m0 = Math.min(CENTERLINE_STEPS - 2, Math.max(0, Math.floor(u)));
+  const f = u - m0;
+  const p0 = pts[m0], p1 = pts[m0 + 1];
+  return [
+    p0[0] + (p1[0] - p0[0]) * f,
+    p0[1] + (p1[1] - p0[1]) * f,
+    p0[2] + (p1[2] - p0[2]) * f,
+  ];
+}
+
 export function buildHysplitModel(index, def, n, rng) {
   const t0 = performance.now();
   const rand = typeof rng === 'function' ? rng : rng.random;
@@ -262,11 +334,26 @@ export function buildHysplitModel(index, def, n, rng) {
       }
       const j = cursor * 3, o = cursor * 4;
       target[j] = p[0]; target[j + 1] = p[1]; target[j + 2] = p[2];
-      offset[o] = 0; offset[o + 1] = 0; offset[o + 2] = 0; offset[o + 3] = 0;
+      offset[o] = 0; offset[o + 1] = 0; offset[o + 2] = 0; offset[o + 3] = -1.0;
       tint[j] = 1.0; tint[j + 1] = 0.97; tint[j + 2] = 0.78;
       pick[cursor] = gIdx;
       cursor++;
     }
+  });
+
+  // Build 32-step 3D plume centerline curve C_r(tau) for each run (0h -> -336h)
+  const centerlineRows = Math.max(1, runs.length);
+  const centerline = new Float32Array(centerlineRows * CENTERLINE_STEPS * 4);
+  const runCenterlines = runs.map((run, ri) => {
+    const pts = buildRunCenterline(run, maxAge);
+    for (let m = 0; m < CENTERLINE_STEPS; m++) {
+      const idx = (ri * CENTERLINE_STEPS + m) * 4;
+      centerline[idx]     = pts[m][0];
+      centerline[idx + 1] = pts[m][1];
+      centerline[idx + 2] = pts[m][2];
+      centerline[idx + 3] = 1.0;
+    }
+    return pts;
   });
 
   // 3. Sample 4D Backward Plume particles weighted by concentration sensitivity
@@ -274,6 +361,7 @@ export function buildHysplitModel(index, def, n, rng) {
   runs.forEach((run, ri) => {
     const rec = run.receptor;
     const recPos = latLonAltToVec3(rec.lat, rec.lon, rec.alt_km);
+    const cPts = runCenterlines[ri];
     const lats = run.lat, lons = run.lon, alts = run.alt_km, ages = run.age_h, weights = run.weight;
     const nVox = lats.length;
 
@@ -303,7 +391,8 @@ export function buildHysplitModel(index, def, n, rng) {
       const age = Math.max(0.1, Math.min(maxAge, ages[lo] + (rand() - 0.5) * 1.2));
 
       const pPlume = latLonAltToVec3(lat, lon, alt);
-      const stage = Math.min(0.82, (age / maxAge) * 0.82);
+      const tau = Math.max(0.002, Math.min(0.998, age / maxAge));
+      const cAtTau = evalCenterline(cPts, tau);
       const col = timeToRgb(age, maxAge);
 
       let gIdx = 0;
@@ -319,15 +408,17 @@ export function buildHysplitModel(index, def, n, rng) {
       }
 
       const j = cursor * 3, o = cursor * 4;
-      // At u_explode = 0 (Fist / 0h), particle sits at its Receptor (`recPos`).
-      // As u_explode -> 1 (Open Hand / -336h), particle travels to `pPlume`!
+      // target = recPos (at s=0 / 0h).
+      // offset.xyz = pPlume - C_r(tau) (local dispersion offset from the plume centerline at age tau!).
+      // offset.w = ri + tau (run index + normalized age tau in [0.002, 0.998]).
+      // At u_explode = 1 (s = 1): C_r(tau) + (pPlume - C_r(tau)) == pPlume identically!
       target[j]     = recPos[0];
       target[j + 1] = recPos[1];
       target[j + 2] = recPos[2];
-      offset[o]     = pPlume[0] - recPos[0];
-      offset[o + 1] = pPlume[1] - recPos[1];
-      offset[o + 2] = pPlume[2] - recPos[2];
-      offset[o + 3] = stage;
+      offset[o]     = pPlume[0] - cAtTau[0];
+      offset[o + 1] = pPlume[1] - cAtTau[1];
+      offset[o + 2] = pPlume[2] - cAtTau[2];
+      offset[o + 3] = ri + tau;
       tint[j]       = col[0];
       tint[j + 1]   = col[1];
       tint[j + 2]   = col[2];
@@ -422,6 +513,8 @@ export function buildHysplitModel(index, def, n, rng) {
     offset,
     tint,
     pick,
+    centerline,
+    centerlineRows,
     labels,
     groups: labels.map((l) => l.label),
     fitScale: 1.0,           // Keep Earth radius constant during backward-time unfolding!

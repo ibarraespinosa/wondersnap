@@ -22,6 +22,8 @@ uniform float u_scale;     // zoom-out that keeps the exploded view on screen
 uniform vec3  u_excenter;  // centre of the fully exploded cloud
 uniform float u_sel;       // selected part id (-100 = none)
 uniform vec3  u_pull;      // world-space pull applied to the selected part (pinch = pull it out toward you)
+uniform sampler2D u_centerline; // 32-step 3D plume centerline curve per run (0h -> -336h)
+uniform float u_has_centerline;
 
 out vec3 out_pos;
 out vec3 out_vel;
@@ -70,9 +72,29 @@ void main() {
     float delay = in_seed.w * STAGGER;
     float e = smoothstep(delay, delay + 0.35, u_form_t);
     float k = K_FORM * e;
-    float s = clamp((u_explode - in_offset.w) / max(1.0 - in_offset.w, 1e-3), 0.0, 1.0);
-    s = s * s * (3.0 - 2.0 * s);
-    vec3 tgt = u_rot * ((in_target + in_offset.xyz * s - u_excenter * u_explode) * u_scale);
+    vec3 modelPos;
+    if (u_has_centerline > 0.5) {
+      if (in_offset.w < -0.5) {
+        modelPos = in_target;
+      } else {
+        int runIdx = int(floor(in_offset.w));
+        float tau = fract(in_offset.w);
+        float s = clamp(u_explode / max(tau, 1e-3), 0.0, 1.0);
+        s = s * s * (3.0 - 2.0 * s);
+        float uCurve = (s * tau) * 31.0;
+        int m0 = clamp(int(floor(uCurve)), 0, 30);
+        float fCurve = uCurve - float(m0);
+        vec3 c0 = texelFetch(u_centerline, ivec2(m0, runIdx), 0).xyz;
+        vec3 c1 = texelFetch(u_centerline, ivec2(m0 + 1, runIdx), 0).xyz;
+        vec3 cTau = mix(c0, c1, fCurve);
+        modelPos = cTau + in_offset.xyz * s;
+      }
+    } else {
+      float s = clamp((u_explode - in_offset.w) / max(1.0 - in_offset.w, 1e-3), 0.0, 1.0);
+      s = s * s * (3.0 - 2.0 * s);
+      modelPos = in_target + in_offset.xyz * s - u_excenter * u_explode;
+    }
+    vec3 tgt = u_rot * (modelPos * u_scale);
     if (abs(in_group - u_sel) < 0.5) tgt += u_pull;
     acc = k * (tgt - p) - 2.0 * sqrt(k) * v + (1.0 - e) * (tang * SWIRL - v * DAMP);
   } else {                                   // dissolve: blow outward

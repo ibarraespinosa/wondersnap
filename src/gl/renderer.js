@@ -3,7 +3,7 @@
 import * as S from './shaders.js';
 import { makeRng } from '../lib/rng.js';
 import { makeSeeds } from '../logic/simRef.js';
-import { buildCoastlineVertices, R_EARTH } from '../models/hysplit.js';
+import { buildCoastlineVertices, R_EARTH, CENTERLINE_STEPS } from '../models/hysplit.js';
 
 // ---------------------------------------------------------------- column-major mat4 helpers
 export function perspective(fovyDeg, aspect, near, far) {
@@ -104,6 +104,12 @@ export class Renderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, 1, 1, 0, gl.RGB, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0]));
     for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
     this.texSize = [1, 1];
+
+    this.centerlineTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.centerlineTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 1, 1, 0, gl.RGBA, gl.FLOAT, new Float32Array(4));
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    this.hasCenterline = false;
   }
 
   program(vs, fs, varyings = null) {
@@ -137,6 +143,14 @@ export class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.tint); gl.bufferSubData(gl.ARRAY_BUFFER, 0, model.tint);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.pick); gl.bufferSubData(gl.ARRAY_BUFFER, 0, model.pick || new Float32Array(model.target.length / 3).fill(-1));
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    if (model.centerline && model.centerlineRows > 0) {
+      gl.bindTexture(gl.TEXTURE_2D, this.centerlineTex);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, CENTERLINE_STEPS, model.centerlineRows, 0, gl.RGBA, gl.FLOAT, model.centerline);
+      this.hasCenterline = true;
+    } else {
+      this.hasCenterline = false;
+    }
   }
 
   uploadVideo(video) {
@@ -155,6 +169,9 @@ export class Renderer {
     this.f1(P, 'u_kick', u.kick); this.m3(P, 'u_rot', mat3Col(u.rot)); this.f1(P, 'u_sphere_r', u.sphereR ?? 0.85);
     this.f1(P, 'u_explode', u.explode ?? 0); this.f1(P, 'u_scale', u.scale ?? 1); this.v3(P, 'u_excenter', u.exCenter ?? [0, 0, 0]);
     this.f1(P, 'u_sel', u.sel ?? -100); this.v3(P, 'u_pull', u.pull ?? [0, 0, 0]);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.centerlineTex);
+    this.i1(P, 'u_centerline', 1);
+    this.f1(P, 'u_has_centerline', this.hasCenterline ? 1.0 : 0.0);
     // WebGL forbids a buffer being bound to TRANSFORM_FEEDBACK_BUFFER and any other target at once
     // (INVALID_OPERATION, and every later step silently does nothing) — so drop the generic binding first.
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
